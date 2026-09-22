@@ -527,6 +527,11 @@ impl Library {
 }
 
 /// Merge a child profile onto its parent (child wins, lists are concatenated).
+///
+/// Argument lists are **concatenated**, not replaced. Fabric/Quilt profiles ship
+/// an empty `game: []` array plus a couple of JVM flags; replacing the parent's
+/// game args wholesale would launch the JVM with no `--username`/`--version`
+/// and the client would exit immediately.
 pub fn merge_profiles(parent: &VersionJson, child: &VersionJson) -> VersionJson {
     let mut merged = parent.clone();
     merged.id = child.id.clone();
@@ -543,10 +548,29 @@ pub fn merge_profiles(parent: &VersionJson, child: &VersionJson) -> VersionJson 
     if child.java_version.is_some() {
         merged.java_version = child.java_version.clone();
     }
-    if child.arguments.is_some() || child.minecraft_arguments.is_some() {
-        merged.arguments = child.arguments.clone();
+
+    match (&parent.arguments, &child.arguments) {
+        (Some(parent_args), Some(child_args)) => {
+            let mut jvm = child_args.jvm.clone();
+            jvm.extend(parent_args.jvm.iter().cloned());
+            let mut game = child_args.game.clone();
+            game.extend(parent_args.game.iter().cloned());
+            merged.arguments = Some(Arguments { jvm, game });
+        }
+        (None, Some(child_args)) => {
+            merged.arguments = Some(child_args.clone());
+        }
+        (Some(parent_args), None) => {
+            merged.arguments = Some(parent_args.clone());
+        }
+        (None, None) => {}
+    }
+
+    // Legacy flat string: child wins when present, otherwise keep the parent.
+    if child.minecraft_arguments.is_some() {
         merged.minecraft_arguments = child.minecraft_arguments.clone();
     }
+
     // Modded profiles prepend their libraries so they shadow the vanilla ones.
     let mut libraries = child.libraries.clone();
     libraries.extend(parent.libraries.iter().cloned());
@@ -699,5 +723,62 @@ mod tests {
         assert_eq!(merged.libraries.len(), 2);
         assert!(merged.libraries[0].name.contains("fabric-loader"));
         assert_eq!(merged.assets.as_deref(), Some("5"));
+    }
+
+    #[test]
+    fn merge_concatenates_arguments_instead_of_replacing() {
+        let parent = VersionJson {
+            id: "1.20.1".into(),
+            inherits_from: None,
+            main_class: Some("net.minecraft.client.main.Main".into()),
+            assets: None,
+            asset_index: None,
+            libraries: vec![],
+            arguments: Some(Arguments {
+                jvm: vec![
+                    ArgumentValue::Plain("-cp".into()),
+                    ArgumentValue::Plain("${classpath}".into()),
+                ],
+                game: vec![
+                    ArgumentValue::Plain("--username".into()),
+                    ArgumentValue::Plain("${auth_player_name}".into()),
+                ],
+            }),
+            minecraft_arguments: None,
+            downloads: None,
+            java_version: None,
+            release_time: None,
+            release_type: None,
+        };
+        let child = VersionJson {
+            id: "fabric-loader-0.15.11-1.20.1".into(),
+            inherits_from: Some("1.20.1".into()),
+            main_class: Some("net.fabricmc.loader.impl.launch.knot.KnotClient".into()),
+            assets: None,
+            asset_index: None,
+            libraries: vec![],
+            // Fabric ships an *empty* game list — replacing would wipe --username.
+            arguments: Some(Arguments {
+                jvm: vec![ArgumentValue::Plain(
+                    "-DFabricMcEmu=net.minecraft.client.main.Main".into(),
+                )],
+                game: vec![],
+            }),
+            minecraft_arguments: None,
+            downloads: None,
+            java_version: None,
+            release_time: None,
+            release_type: None,
+        };
+
+        let merged = merge_profiles(&parent, &child);
+        let args = merged.arguments.expect("merged args");
+        let features = FeatureSet::default();
+        let jvm = Arguments::flatten(&args.jvm, &features);
+        let game = Arguments::flatten(&args.game, &features);
+        assert!(jvm.iter().any(|token| token.starts_with("-DFabricMcEmu")));
+        assert!(jvm.iter().any(|token| *token == "-cp"));
+        assert!(game.iter().any(|token| *token == "--username"));
+        assert!(game.iter().any(|token| *token == "${auth_player_name}"));
     }
 }

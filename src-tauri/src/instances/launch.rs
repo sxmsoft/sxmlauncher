@@ -47,12 +47,22 @@ pub struct LaunchExtras {
 }
 
 /// A fully resolved, ready-to-spawn command.
+///
+/// JVM args, the main class and game args are kept separate on purpose: the
+/// process must be spawned as `java [jvm…] MainClass [game…]`. Mixing game
+/// flags into the JVM section (or appending the main class after them) makes
+/// the JVM treat `--username` as an unknown option and exit before the game
+/// ever starts — which is exactly the "install succeeds, Play does nothing"
+/// failure mode.
 #[derive(Debug, Clone)]
 pub struct LaunchPlan {
     pub java: PathBuf,
     pub main_class: String,
     pub classpath: Vec<PathBuf>,
-    pub arguments: Vec<String>,
+    /// Flags that come *before* the main class (`-Xmx`, `-cp`, agents, …).
+    pub jvm_arguments: Vec<String>,
+    /// Flags that come *after* the main class (`--username`, `--version`, …).
+    pub game_arguments: Vec<String>,
     pub working_directory: PathBuf,
     pub env: HashMap<String, String>,
     pub log_file: PathBuf,
@@ -62,10 +72,13 @@ pub struct LaunchPlan {
 impl LaunchPlan {
     /// Full argv, with the executable first (for display/diagnostics).
     pub fn command_line(&self) -> Vec<String> {
-        let mut argv = Vec::with_capacity(self.arguments.len() + 4);
+        let mut argv = Vec::with_capacity(
+            self.jvm_arguments.len() + self.game_arguments.len() + 2,
+        );
         argv.push(self.java.to_string_lossy().into_owned());
-        argv.extend(self.arguments.iter().cloned());
+        argv.extend(self.jvm_arguments.iter().cloned());
         argv.push(self.main_class.clone());
+        argv.extend(self.game_arguments.iter().cloned());
         argv
     }
 
@@ -188,8 +201,6 @@ impl LaunchPlanner {
         substitutions.insert("auth_session_id", String::new());
         substitutions.insert("profile_name", String::new());
 
-        let mut arguments: Vec<String> = Vec::new();
-
         // --- JVM arguments -------------------------------------------------
         let mut jvm: Vec<String> = match &version.arguments {
             Some(arguments) => Arguments::flatten(&arguments.jvm, &features)
@@ -226,7 +237,6 @@ impl LaunchPlanner {
             jvm.push(self.authlib_agent_args(authlib)?);
         }
         jvm.extend(config.java.jvm_args.iter().cloned());
-        arguments.extend(jvm);
 
         // --- main class & game arguments -----------------------------------
         let main_class = version.main_class.clone().ok_or_else(|| {
@@ -258,13 +268,20 @@ impl LaunchPlanner {
         }
         game.extend(config.game_args.iter().cloned());
 
-        arguments.extend(game);
+        if game.is_empty() {
+            return Err(AppError::Config(format!(
+                "{} produced no game arguments — the version profile is incomplete \
+                 (often a failed Fabric/Forge merge). Repair the instance install.",
+                version.id
+            )));
+        }
 
         Ok(LaunchPlan {
             java: java.clone(),
             main_class,
             classpath,
-            arguments,
+            jvm_arguments: jvm,
+            game_arguments: game,
             working_directory: root,
             env: std::env::vars().collect(),
             log_file: self.paths.log_file(&format!("instance-{}", config.id)),
@@ -442,9 +459,11 @@ pub async fn spawn(
     }
 
     let mut command = crate::process::command(&plan.java);
+    // Order is load-bearing: `java [jvm…] MainClass [game…]`.
     command
-        .args(&plan.arguments)
+        .args(&plan.jvm_arguments)
         .arg(&plan.main_class)
+        .args(&plan.game_arguments)
         .current_dir(&plan.working_directory)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -561,8 +580,8 @@ mod tests {
             java: PathBuf::from("/java"),
             main_class: "net.minecraft.client.main.Main".into(),
             classpath: vec![PathBuf::from("/a.jar")],
-            arguments: vec![
-                "-Xmx2G".into(),
+            jvm_arguments: vec!["-Xmx2G".into()],
+            game_arguments: vec![
                 "--accessToken".into(),
                 "super-secret".into(),
                 "--username".into(),
@@ -578,6 +597,12 @@ mod tests {
         assert!(!redacted.contains("super-secret"));
         assert!(redacted.contains("<redacted>"));
         assert!(redacted.contains("Steve"));
+        // Main class must sit between JVM and game args.
+        let argv = plan.command_line();
+        assert_eq!(argv[0], "/java");
+        assert_eq!(argv[1], "-Xmx2G");
+        assert_eq!(argv[2], "net.minecraft.client.main.Main");
+        assert_eq!(argv[3], "--accessToken");
     }
 
     #[test]
