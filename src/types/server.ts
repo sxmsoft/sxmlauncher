@@ -166,7 +166,7 @@ export interface GuestStatus {
 
 export interface HostStatus {
   id: string;
-  /** Shareable code, e.g. `SXM1-7K4Q-2M9V-TR3N-XW8P`. */
+  /** Shareable code, e.g. `SXM1-AEAI-RMQG-NTKC-WSQT-ELAX-3T6N-CYAB-FF6E-NQ`. */
   shareCode: string;
   summary: ServerListingSummary;
   mode: ConnectionMode;

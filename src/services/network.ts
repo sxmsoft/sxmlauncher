@@ -91,17 +91,34 @@ export const networkService = {
 
 export type NetworkService = typeof networkService;
 
-/** Normalize a share code as the user types: groups of four, uppercase. */
+/**
+ * Base32 length of a 21-byte `ConnectCode` payload: `ceil(21 * 8 / 5) = 34`.
+ * Sixteen characters decode to 10 bytes, which the backend rejects.
+ */
+const SHARE_CODE_PAYLOAD_CHARS = 34;
+
+/**
+ * `SXM1-` plus eight groups of four and a final group of two.
+ * Alphabet matches the Rust encoder (RFC 4648: `A–Z` and `2–7`).
+ */
+const SHARE_CODE_PATTERN =
+  /^SXM1(?:-[A-Z2-7]{4}){8}-[A-Z2-7]{2}$/;
+
+/**
+ * Normalize a share code as the user types: groups of four, uppercase.
+ *
+ * `1` is not in the payload alphabet, so `SXM1` can only be the prefix.
+ * Strip every copy — pasting a full code into a field that already shows
+ * the prefix must not consume the 34-character budget twice.
+ */
 export function formatShareCode(raw: string): string {
   const cleaned = raw.toUpperCase().replace(/[^A-Z0-9]/g, "");
-  const withoutPrefix = cleaned.startsWith("SXM1") ? cleaned.slice(4) : cleaned;
-  const groups = withoutPrefix.slice(0, 16).match(/.{1,4}/g) ?? [];
+  const payload = cleaned.replaceAll("SXM1", "").slice(0, SHARE_CODE_PAYLOAD_CHARS);
+  const groups = payload.match(/.{1,4}/g) ?? [];
   return ["SXM1", ...groups].join("-");
 }
 
-const SHARE_CODE_PATTERN = /^SXM1-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/;
-
-/** True when the code is complete enough to submit. */
+/** True when the code is a full 21-byte payload and can be submitted. */
 export function isCompleteShareCode(code: string): boolean {
   return SHARE_CODE_PATTERN.test(formatShareCode(code));
 }

@@ -781,7 +781,7 @@ export function mockResponse(command: string, args?: Record<string, unknown>): u
     case "host_start":
       return {
         id: "bbbb2222-0000-4000-8000-000000000001",
-        shareCode: "SXM1-7K4Q-2M9V-TR3N-XW8P",
+        shareCode: "SXM1-AEAI-RMQG-NTKC-WSQT-ELAX-3T6N-CYAB-FF6E-NQ",
         mode: "direct_p2p",
         natAdvice: "Endpoint-independent NAT: direct P2P hosting should work.",
         publicEndpoint: "203.0.113.42:51109",
@@ -802,7 +802,7 @@ export function mockResponse(command: string, args?: Record<string, unknown>): u
         rttMs: 34,
       };
     case "connection_code":
-      return "SXM1-7K4Q-2M9V-TR3N-XW8P";
+      return "SXM1-AEAI-RMQG-NTKC-WSQT-ELAX-3T6N-CYAB-FF6E-NQ";
     case "local_rtt":
       return 5;
 

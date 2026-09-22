@@ -12,7 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/input";
 import { useJoinCode } from "@/hooks/queries";
 import { formatShareCode, isCompleteShareCode } from "@/services";
 
@@ -33,7 +33,8 @@ export function JoinCodeDialog({
   const [raw, setRaw] = useState("");
   const join = useJoinCode();
 
-  const code = formatShareCode(raw);
+  const formatted = formatShareCode(raw);
+  const code = raw.trim() === "" ? "" : formatted;
   const complete = isCompleteShareCode(raw);
 
   const submit = () => {
@@ -47,7 +48,7 @@ export function JoinCodeDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="w-[min(94vw,40rem)]">
         <DialogHeader>
           <DialogTitle>Join with a code</DialogTitle>
           <DialogDescription>
@@ -57,14 +58,18 @@ export function JoinCodeDialog({
         </DialogHeader>
 
         <div className="flex flex-col gap-3">
-          <Input
+          <Textarea
             value={code}
             onChange={(event) => setRaw(event.target.value)}
-            placeholder="SXM1-XXXX-XXXX-XXXX-XXXX"
-            className="text-center font-mono text-base tracking-[0.2em]"
+            placeholder="SXM1-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XX"
+            rows={2}
+            className="min-h-16 resize-none text-center font-mono text-sm leading-6 break-all tracking-normal"
             autoFocus
             onKeyDown={(event) => {
-              if (event.key === "Enter" && complete) submit();
+              if (event.key === "Enter" && complete) {
+                event.preventDefault();
+                submit();
+              }
             }}
           />
           <div className="flex items-center gap-2">

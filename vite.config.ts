@@ -1,7 +1,7 @@
-import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { fileURLToPath, URL } from "node:url";
+import { defineConfig } from "vitest/config";
 
 // Tauri injects these so the dev server can be reached from the native window.
 const host = process.env.TAURI_DEV_HOST;
@@ -30,6 +30,10 @@ export default defineConfig({
 
   clearScreen: false,
   envPrefix: ["VITE_", "TAURI_ENV_"],
+  test: {
+    environment: "node",
+    include: ["src/**/*.test.ts"],
+  },
   build: {
     // Tauri v2 ships a modern webview on every platform.
     target: "es2022",

@@ -14,8 +14,9 @@
 //! bytes 17..21 CRC32 of the previous bytes
 //! ```
 //!
-//! Rendered as grouped base32 so it survives being read aloud or retyped:
-//! `SXM1-7K4Q-2M9V-TR3N-XW8P`.
+//! Rendered as grouped base32 (34 characters: eight groups of four and a
+//! final pair) so it survives being read aloud or retyped:
+//! `SXM1-AEAI-RMQG-NTKC-WSQT-ELAX-3T6N-CYAB-FF6E-NQ`.
 
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
