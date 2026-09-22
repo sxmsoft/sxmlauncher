@@ -1,0 +1,137 @@
+name: Release
+
+# Builds the signed Windows installers (NSIS + MSI), generates the updater
+# feed and publishes everything to a GitHub release. Runs on `v*` tags and
+# can also be re-run manually for an existing tag (overwrites its assets).
+#
+# Required repository secret:
+#   TAURI_SIGNING_PRIVATE_KEY            contents of .keys/sxmlauncher.key
+# Optional secret (needed if the key was generated with a password):
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+#
+# The feed endpoint in tauri.conf.json points at
+# https://github.com/sxmlauncher/sxmlauncher/releases/latest/download/latest.json
+# — once the first release is published, installed launchers pick up new
+# versions automatically from that URL.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build and release, e.g. v0.2.0"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release:
+    name: Build & publish (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-latest]
+    runs-on: ${{ matrix.runner }}
+    env:
+      APP_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      REPO_SLUG: ${{ github.repository }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install Rust (stable, cache scoped to Cargo home + target dir)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Set up Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          cache-all-crates: true
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Gate release on tests and typecheck
+        run: |
+          pnpm typecheck
+          cargo test --lib --release --manifest-path src-tauri/Cargo.toml
+          pnpm build
+
+      - name: Sync version from tag
+        run: node scripts/sync-version.mjs "$APP_TAG"
+
+      - name: Build signed installers (NSIS + MSI)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm tauri build -b msi,nsis
+
+      - name: Generate updater feed (latest.json)
+        run: |
+          node scripts/generate-latest-json.mjs \
+            src-tauri/target/release/bundle \
+            "$APP_TAG" \
+            "SXMLauncher ${APP_TAG#v}" \
+            --base-url "https://github.com/${REPO_SLUG}/releases/download/${APP_TAG}" \
+            --out src-tauri/target/release/bundle/latest.json
+
+      # Pre-publish gate: the feed's URLs point at release assets that only
+      # exist after the next step, so verify against the local files instead.
+      - name: Verify the feed matches the built artifacts
+        run: |
+          node --input-type=module -e "
+            import { access, readFile } from 'node:fs/promises';
+            import { basename } from 'node:path';
+            const tag = process.env.APP_TAG;
+            const feed = JSON.parse(await readFile('src-tauri/target/release/bundle/latest.json', 'utf8'));
+            if (feed.version !== tag.replace(/^v/, '')) throw new Error('feed version mismatch');
+            for (const [platform, entry] of Object.entries(feed.platforms)) {
+              if (!entry.signature) throw new Error(platform + ': empty signature');
+              const dir = entry.url.split('/').at(-2);
+              const artifact = 'src-tauri/target/release/bundle/' + dir + '/' + basename(entry.url);
+              await access(artifact);
+            }
+            console.log('feed ok:', Object.keys(feed.platforms).join(', '));
+          "
+
+      - name: Publish to the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.APP_TAG }}
+          name: SXMLauncher ${{ env.APP_TAG }}
+          draft: false
+          prerelease: ${{ contains(env.APP_TAG, '-') }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/*.exe.sig
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/msi/*.msi.sig
+            src-tauri/target/release/bundle/latest.json

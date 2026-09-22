@@ -1,0 +1,89 @@
+[package]
+name = "sxmlauncher"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+description = "SXMLauncher — all-in-one Minecraft client, launcher, modpack manager and P2P server host"
+authors = ["SXMLauncher Contributors"]
+license = "MIT"
+repository = "https://github.com/sxmlauncher/sxmlauncher"
+default-run = "sxmlauncher"
+
+[lib]
+name = "sxmlauncher_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# --- Tauri shell + official plugins -------------------------------------
+tauri = { version = "2", features = ["macos-private-api", "tray-icon", "protocol-asset"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-os = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-store = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+
+# --- serialization / errors --------------------------------------------
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+# --- async runtime ------------------------------------------------------
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "fs", "process", "signal"] }
+tokio-util = { version = "0.7", features = ["io", "rt"] }
+futures = "0.3"
+async-trait = "0.1"
+
+# --- http / crypto / ids ------------------------------------------------
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "gzip", "multipart"] }
+sha1 = "0.10"
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+# `v3` is MD5, which is what vanilla uses for offline (`OfflinePlayer:<name>`) UUIDs.
+uuid = { version = "1", features = ["v3", "v4", "v5", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+rand = "0.8"
+url = "2"
+regex = "1"
+
+# --- local state --------------------------------------------------------
+parking_lot = "0.12"
+dashmap = "6"
+walkdir = "2"
+redis = { version = "0.32.7", features = ["tokio-comp", "connection-manager"] }
+# Embedded MQTT directory: the client-side global server browser needs no
+# Redis server — a public broker's retained messages carry the listings.
+# rustls/rustls-native-certs versions match rumqttc's TLS stack (0.22 / 0.7)
+# so we can hand it a native-root ClientConfig without duplicate crates.
+rumqttc = "0.24"
+rustls = { version = "0.22", default-features = false, features = ["logging", "tls12", "ring"] }
+rustls-native-certs = "0.7"
+rusqlite = { version = "0.40.2", features = ["bundled", "chrono"] }
+# IMPORTANT: keyring has no default features. Without a platform store feature it
+# links the `mock` backend, which silently drops every credential we store.
+keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "linux-native-sync-persistent", "crypto-rust"] }
+zip = "5.0.1"
+dirs = "7.0.0"
+tar = "0.4.46"
+flate2 = "1.1.10"
+
+[features]
+# Default Tauri feature set; `custom-protocol` is enabled by `tauri build`.
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.dev]
+# Faster rebuilds for the desktop shell while keeping deps optimized.
+incremental = true
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

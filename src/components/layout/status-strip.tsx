@@ -1,0 +1,141 @@
+import { useEffect, useState } from "react";
+
+import { Gauge, Globe, Radio, X } from "lucide-react";
+
+import { StatusDot } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { IndeterminateProgress, Progress } from "@/components/ui/progress";
+import { useNetworkStatus, useRunningInstances } from "@/hooks/queries";
+import { cn, formatBytes, percent } from "@/lib/utils";
+import { aggregateProgress, useJobsStore } from "@/stores/jobs";
+import { useSessionsStore } from "@/stores/sessions";
+import { STAGE_LABEL } from "@/types/modpack";
+
+/**
+ * Bottom strip: what the app is doing right now.
+ *
+ * One line, always visible: the newest job with a live progress bar, how many
+ * games are running, the directory, and how many peers are connected. When
+ * nothing is happening it reports idle state rather than disappearing, so the
+ * layout never shifts.
+ *
+ * The ✕ button *stops* a running job (cancelling the download in the backend),
+ * not just hides its bar; that is why pressing ✕ in the Activity panel and
+ * pressing ✕ here behave the same.
+ */
+export function StatusStrip() {
+  const jobs = useJobsStore((state) => state.jobs);
+  const cancelling = useJobsStore((state) => state.cancelling);
+  const cancel = useJobsStore((state) => state.cancel);
+  const dismiss = useJobsStore((state) => state.dismiss);
+  const { data: status } = useNetworkStatus();
+  const { data: running } = useRunningInstances();
+  const hosts = useSessionsStore((state) => Object.keys(state.hosts).length);
+  const guests = useSessionsStore((state) => Object.keys(state.guests).length);
+
+  const active = jobs.filter((job) => !job.finished && !job.error);
+  const current = jobs[0] ?? null;
+  const aggregate = aggregateProgress(active);
+
+  // Throughput is only meaningful while something is downloading.
+  const [rate, setRate] = useState(0);
+  useEffect(() => {
+    setRate(active.reduce((sum, job) => sum + job.bytesPerSecond, 0));
+  }, [active]);
+
+  const downloadLike = current?.stage === "downloading" || current?.stage === "verifying";
+  const value = current ? percent(current.completedUnits, current.totalUnits) : 0;
+  const isActive = current != null && !current.finished && !current.error;
+  const isCancelling = current != null && cancelling.includes(current.jobId);
+
+  return (
+    <footer className="flex h-8 shrink-0 items-center gap-3 border-t border-white/6 px-3 text-[11px]">
+      {current ? (
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          {current.error ? (
+            <StatusDot tone="destructive" />
+          ) : current.finished ? (
+            <StatusDot tone="success" />
+          ) : (
+            <StatusDot tone="primary" pulse />
+          )}
+          <span className="truncate font-medium">
+            {isCancelling ? "Stopping" : STAGE_LABEL[current.stage]} · {current.label}
+          </span>
+          <span className="text-muted-foreground hidden truncate sm:inline">
+            {current.currentItem ?? current.detail ?? ""}
+          </span>
+
+          <div className="ml-2 hidden w-44 shrink-0 md:block">
+            {current.totalUnits > 0 ? (
+              <Progress value={value} className="h-1.5" />
+            ) : (
+              <IndeterminateProgress className="h-1.5" />
+            )}
+          </div>
+
+          {downloadLike && rate > 0 ? (
+            <span className="text-muted-foreground shrink-0 tabular-nums">
+              {formatBytes(rate)}/s
+            </span>
+          ) : null}
+
+          {active.length > 1 ? (
+            <span className="text-muted-foreground shrink-0">
+              +{active.length - 1} more
+            </span>
+          ) : null}
+
+          <span className="text-muted-foreground ml-auto shrink-0 tabular-nums">
+            {current.totalUnits > 0
+              ? `${Math.round(value)}%`
+              : `${Math.round(aggregate.percent)}%`}
+          </span>
+
+          {isActive ? (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="shrink-0"
+              onClick={() => void cancel(current.jobId)}
+              disabled={isCancelling}
+            >
+              <X className="size-3" />
+              <span className="sr-only">Stop this download</span>
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="shrink-0"
+              onClick={() => dismiss(current.jobId)}
+            >
+              <X className="size-3" />
+              <span className="sr-only">Dismiss progress</span>
+            </Button>
+          )}
+        </div>
+      ) : (
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <StatusDot tone="muted" />
+          <span className="text-muted-foreground">idle</span>
+        </div>
+      )}
+
+      <div className="flex shrink-0 items-center gap-3">
+        <span className="text-muted-foreground flex items-center gap-1.5">
+          <Radio className="size-3" />
+          {hosts} hosting · {guests} joined
+        </span>
+        <span className={cn("flex items-center gap-1.5", running && running.length > 0 ? "text-[var(--success)]" : "text-muted-foreground")}>
+          <Gauge className="size-3" />
+          {running?.length ?? 0} running
+        </span>
+        <span className="text-muted-foreground flex items-center gap-1.5">
+          <Globe className="size-3" />
+          {status?.directoryConnected ? `${status.onlinePlayers} online` : `LAN · ${status?.lanWorlds ?? 0} nearby`}
+        </span>
+      </div>
+    </footer>
+  );
+}
