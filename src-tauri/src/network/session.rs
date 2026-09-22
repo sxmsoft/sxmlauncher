@@ -5,10 +5,10 @@
 //! ```text
 //! 1. discover our public UDP mapping (STUN)         -> PeerEndpoint list
 //! 2. bind the punch socket, mint a session token
-//! 3. publish the ServerListing to Redis (TTL 30s)
-//! 4. spawn the heartbeat task (every 10s, keeps TTL + player counts fresh)
-//! 5. accept punches: token check -> tunnel handshake -> bridge to 127.0.0.1:25565
-//! 6. publish a share code + emit SessionEvent::GuestJoined
+//! 3. publish the ServerListing (public browse index, or body-only when private)
+//! 4. publish the share code and refresh it on every heartbeat
+//! 5. spawn the heartbeat task (every 10s, keeps listing + code TTLs fresh)
+//! 6. accept punches: token check -> tunnel handshake -> bridge to 127.0.0.1:25565
 //! ```
 //!
 //! ## Joining (`join_world`)
@@ -158,6 +158,11 @@ impl HostSession {
     /// finalizes what it can reach.
     pub async fn stop(&self) -> AppResult<()> {
         self.cancel.cancel();
+        self._heartbeat.abort();
+        // A heartbeat tick already in flight may refresh the code mapping.
+        // Let it observe cancellation, then delete so stop wins.
+        tokio::task::yield_now().await;
+        let _ = self.directory.delete_code(&self.share_code).await;
         let _ = self.directory.remove_listing(self.id, &self.peer_id).await;
         let _ = self
             .directory
@@ -269,6 +274,24 @@ pub enum SessionEvent {
     Stopped {
         id: Uuid,
     },
+}
+
+/// Persist the listing and refresh the share-code → id mapping.
+///
+/// Browse indexing stays gated on `public`. The code mapping is written
+/// either way, and calling this again resets both TTLs.
+async fn sync_hosted_directory(
+    directory: &Arc<dyn Directory>,
+    listing: &ServerListing,
+    share_code: &str,
+    public: bool,
+) -> AppResult<()> {
+    if public {
+        directory.publish_listing(listing).await?;
+    } else {
+        directory.save_listing(listing).await?;
+    }
+    directory.put_code(share_code, listing.id).await
 }
 
 /// Owns every active host/guest session.
@@ -443,17 +466,8 @@ impl SessionManager {
         let (events, _) = broadcast::channel(64);
         let cancel = CancellationToken::new();
 
-        // 4. Register with the directory (only public sessions are listed).
-        //
-        // Clone before awaiting: a `parking_lot` read guard is not `Send`, and
-        // holding one across an await point would make every command that hosts
-        // a world fail to compile as a Tauri command.
-        if options.public {
-            let snapshot = listing.read().clone();
-            self.directory.publish_listing(&snapshot).await?;
-        }
-
-        // 5. Share code so a friend can join without the browser.
+        // 4. Share code so a friend can join without the browser. Issued for
+        // public and private hosts — the UI shows it either way.
         let share_code = match (public_endpoint, options.force_relay) {
             (Some(address), false) => ConnectCode::direct(
                 id,
@@ -474,15 +488,24 @@ impl SessionManager {
             )
             .to_share_string(),
         };
-        if options.public {
-            self.directory.put_code(&share_code, id).await?;
-        }
 
-        // 6. Heartbeat loop.
+        // 5. Directory. Public sessions join the browse index. Private
+        // sessions store the listing body only, but both store the code.
+        //
+        // Clone before awaiting: a `parking_lot` read guard is not `Send`, and
+        // holding one across an await point would make every command that hosts
+        // a world fail to compile as a Tauri command.
+        let snapshot = listing.read().clone();
+        sync_hosted_directory(&self.directory, &snapshot, &share_code, options.public).await?;
+
+        // 6. Heartbeat loop. Refreshes the listing TTL and the share-code TTL
+        // together so an invite stays valid for the whole host session.
         let heartbeat_directory = self.directory.clone();
         let heartbeat_listing = listing.clone();
         let heartbeat_cancel = cancel.clone();
         let heartbeat_events = events.clone();
+        let heartbeat_public = options.public;
+        let heartbeat_code = share_code.clone();
         let guests_for_count = Arc::new(DashMap::<String, GuestConnection>::new());
         let count_source = guests_for_count.clone();
 
@@ -502,7 +525,14 @@ impl SessionManager {
                             (listing.players.max, listing.ttl_secs)
                         };
                         let snapshot = heartbeat_listing.read().clone();
-                        if let Err(err) = heartbeat_directory.publish_listing(&snapshot).await {
+                        if let Err(err) = sync_hosted_directory(
+                            &heartbeat_directory,
+                            &snapshot,
+                            &heartbeat_code,
+                            heartbeat_public,
+                        )
+                        .await
+                        {
                             let _ = heartbeat_events.send(SessionEvent::Error {
                                 id,
                                 message: err.to_string(),
@@ -1439,6 +1469,98 @@ mod tests {
             "punch to {target} failed: {punched:?}"
         );
         host_task.await.expect("host task");
+    }
+
+    #[tokio::test]
+    async fn private_host_puts_a_code_that_heartbeat_keeps_alive() {
+        use crate::models::progress::NoopProgressSink;
+        use crate::models::server::ServerFilter;
+        use crate::network::directory::{MemoryDirectory, CODE_TTL_SECS};
+        use crate::network::relay::RelayTransport;
+        use crate::network::transport::{DirectTransport, TransportRegistry};
+        use crate::store::Database;
+
+        let directory = std::sync::Arc::new(MemoryDirectory::new());
+        let transports = std::sync::Arc::new(TransportRegistry::new(
+            std::sync::Arc::new(DirectTransport::new("127.0.0.1:0".parse().unwrap())),
+            std::sync::Arc::new(RelayTransport::new(None)),
+        ));
+        let manager = SessionManager::new(
+            directory.clone(),
+            transports,
+            Database::open_in_memory().expect("db"),
+            PunchConfig::default(),
+            String::new(),
+        );
+        let mut options = HostOptions::default();
+        options.public = false;
+        options.force_relay = true;
+        let host = manager
+            .host_world(options, std::sync::Arc::new(NoopProgressSink))
+            .await
+            .expect("host");
+
+        let resolved = directory
+            .resolve_code(&host.share_code)
+            .await
+            .expect("resolve")
+            .expect("private share code is stored");
+        assert_eq!(resolved.id, host.id);
+        assert!(directory
+            .listing(host.id)
+            .await
+            .expect("listing")
+            .is_some());
+        let browse = directory
+            .browse(&ServerFilter::default())
+            .await
+            .expect("browse");
+        assert!(
+            browse.iter().all(|row| row.id != host.id),
+            "a private host must stay out of the browser"
+        );
+
+        // Let the immediate heartbeat tick land before moving the virtual
+        // clock, so a refresh cannot race the expiry assertion.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let past_ttl = i64::try_from(CODE_TTL_SECS).unwrap() + 1;
+        directory.advance_secs(past_ttl);
+        assert!(
+            directory
+                .resolve_code(&host.share_code)
+                .await
+                .expect("resolve")
+                .is_none(),
+            "the original put expires once the virtual clock passes CODE_TTL"
+        );
+
+        let snapshot = host.listing.read().clone();
+        sync_hosted_directory(manager.directory(), &snapshot, &host.share_code, false)
+            .await
+            .expect("heartbeat refresh");
+        let refreshed = directory
+            .resolve_code(&host.share_code)
+            .await
+            .expect("resolve")
+            .expect("heartbeat keeps the invite resolvable");
+        assert_eq!(refreshed.id, host.id);
+        let browse = directory
+            .browse(&ServerFilter::default())
+            .await
+            .expect("browse");
+        assert!(browse.iter().all(|row| row.id != host.id));
+
+        let code = host.share_code.clone();
+        host.stop().await.expect("stop");
+        assert!(
+            directory
+                .resolve_code(&code)
+                .await
+                .expect("resolve")
+                .is_none(),
+            "stopping the host deletes the share code"
+        );
+        assert!(directory.listing(host.id).await.expect("listing").is_none());
     }
 
     #[test]

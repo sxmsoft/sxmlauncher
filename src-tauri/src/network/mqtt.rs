@@ -26,7 +26,7 @@
 //! * **Online counter** is derived from the cached listings (sum of reported
 //!   players) instead of a racy shared counter — it is a badge, not a ledger.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
@@ -82,6 +82,8 @@ pub struct BrokerMessage {
 struct MqttCache {
     listings: HashMap<uuid::Uuid, ServerListing>,
     codes: HashMap<String, uuid::Uuid>,
+    /// Listings kept for share-code resolve but omitted from browse.
+    unlisted: HashSet<uuid::Uuid>,
 }
 
 impl MqttCache {
@@ -214,9 +216,13 @@ impl MqttDirectory {
                                 }
                             }
                         } else if suffix.starts_with("code/") {
-                            if let Ok(id) = serde_json::from_slice::<uuid::Uuid>(&publish.payload)
+                            let code = suffix["code/".len()..].to_uppercase();
+                            if publish.payload.is_empty() || publish.payload.as_ref() == TOMBSTONE
                             {
-                                let code = suffix["code/".len()..].to_uppercase();
+                                loop_cache.write().codes.remove(&code);
+                            } else if let Ok(id) =
+                                serde_json::from_slice::<uuid::Uuid>(&publish.payload)
+                            {
                                 loop_cache.write().codes.insert(code, id);
                             }
                         } else if suffix.starts_with("signal/") {
@@ -389,9 +395,29 @@ impl super::Directory for MqttDirectory {
     async fn publish_listing(&self, listing: &ServerListing) -> AppResult<()> {
         let payload = serde_json::to_vec(listing)
             .map_err(|err| AppError::Directory(format!("listing encode failed: {err}")))?;
+        {
+            let mut cache = self.cache.write();
+            cache.listings.insert(listing.id, listing.clone());
+            cache.unlisted.remove(&listing.id);
+        }
         // Retained publish: replaces the snapshot for this id on every broker
         // client and seeds every future subscriber. The heartbeat loop calls
         // this every few seconds — this IS the TTL mechanism.
+        self.publish_retained(format!("listing/{}", listing.id), payload)
+            .await
+    }
+
+    async fn save_listing(&self, listing: &ServerListing) -> AppResult<()> {
+        let payload = serde_json::to_vec(listing)
+            .map_err(|err| AppError::Directory(format!("listing encode failed: {err}")))?;
+        {
+            let mut cache = self.cache.write();
+            cache.listings.insert(listing.id, listing.clone());
+            cache.unlisted.insert(listing.id);
+        }
+        // Same retained body as a public listing so a guest can resolve the
+        // invite. This process hides it from browse; other MQTT subscribers
+        // still see the retained `listing/` message.
         self.publish_retained(format!("listing/{}", listing.id), payload)
             .await
     }
@@ -401,7 +427,11 @@ impl super::Directory for MqttDirectory {
     }
 
     async fn remove_listing(&self, id: uuid::Uuid, _peer_id: &str) -> AppResult<()> {
-        self.cache.write().listings.remove(&id);
+        {
+            let mut cache = self.cache.write();
+            cache.listings.remove(&id);
+            cache.unlisted.remove(&id);
+        }
         // 1. Tombstone: live subscribers drop the listing immediately.
         let _ = self
             .publish_retained(format!("listing/{id}"), TOMBSTONE.to_vec())
@@ -414,9 +444,10 @@ impl super::Directory for MqttDirectory {
 
     async fn browse(&self, filter: &ServerFilter) -> AppResult<Vec<ServerListingSummary>> {
         let listings = self.wait_for_snapshot().await;
+        let unlisted = self.cache.read().unlisted.clone();
         Ok(listings
             .iter()
-            .filter(|listing| filter.matches(listing))
+            .filter(|listing| !unlisted.contains(&listing.id) && filter.matches(listing))
             .map(ServerListingSummary::from)
             .collect())
     }
@@ -468,6 +499,17 @@ impl super::Directory for MqttDirectory {
             serde_json::to_vec(&server_id).unwrap_or_default(),
         )
         .await
+    }
+
+    async fn delete_code(&self, code: &str) -> AppResult<()> {
+        let code = code.to_uppercase();
+        self.cache.write().codes.remove(&code);
+        let suffix = format!("code/{code}");
+        let _ = self
+            .publish_retained(suffix.clone(), TOMBSTONE.to_vec())
+            .await;
+        let _ = self.publish_retained(suffix, Vec::new()).await;
+        Ok(())
     }
 
     async fn resolve_code(&self, code: &str) -> AppResult<Option<ServerListing>> {

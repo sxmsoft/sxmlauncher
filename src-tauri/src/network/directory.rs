@@ -7,7 +7,7 @@
 //! sxml:servers:{id}         STRING  ServerListing JSON, TTL = ttl_secs
 //! sxml:heartbeat:{id}       PUBSUB  ServerHeartbeat JSON
 //! sxml:signal:{peer_id}     PUBSUB  SignalingEnvelope JSON
-//! sxml:code:{CODE}          STRING  server_id, TTL = 300s
+//! sxml:code:{CODE}          STRING  server_id, TTL refreshed on each host heartbeat
 //! sxml:stats:online         STRING  global concurrent-player counter
 //! ```
 //!
@@ -34,7 +34,11 @@ use crate::models::server::{
 
 /// Namespace for every key this app owns.
 pub const KEY_PREFIX: &str = "sxml";
-/// How long a share code stays resolvable.
+/// Redis expiry for a share code between heartbeats.
+///
+/// The host calls [`RedisDirectory::put_code`] again on every heartbeat, so a
+/// live session stays joinable for as long as it is hosted. A crashed host
+/// stops refreshing and the code disappears with this delay.
 pub const CODE_TTL_SECS: u64 = 300;
 /// Cap on listings returned by one browse (protects the UI and the network).
 pub const BROWSE_LIMIT: u32 = 200;
@@ -359,13 +363,38 @@ impl RedisDirectory {
         Ok(rx)
     }
 
+    /// Store the listing body without adding it to the browse index.
+    ///
+    /// Private ("share-code only") sessions still have to be resolvable by id
+    /// after `put_code`. Heartbeats call this again to refresh the TTL.
+    pub async fn save_listing(&self, listing: &ServerListing) -> AppResult<()> {
+        let payload = serde_json::to_string(listing)?;
+        let mut conn = self.manager.clone();
+        let ttl = u64::from(listing.ttl_secs.max(1));
+        let _: () = conn
+            .set_ex(self.listing_key(listing.id), payload, ttl)
+            .await
+            .map_err(map_redis)?;
+        Ok(())
+    }
+
     /// Store a share code so a friend can type it instead of a raw address.
+    ///
+    /// Calling this again resets the TTL. The host heartbeat does that for the
+    /// whole session; `CODE_TTL_SECS` is only the gap after the last refresh.
     pub async fn put_code(&self, code: &str, server_id: uuid::Uuid) -> AppResult<()> {
         let mut conn = self.manager.clone();
         let _: () = conn
             .set_ex(self.code_key(code), server_id.to_string(), CODE_TTL_SECS)
             .await
             .map_err(map_redis)?;
+        Ok(())
+    }
+
+    /// Drop a share code immediately (host stopped).
+    pub async fn delete_code(&self, code: &str) -> AppResult<()> {
+        let mut conn = self.manager.clone();
+        let _: () = conn.del(self.code_key(code)).await.map_err(map_redis)?;
         Ok(())
     }
 
@@ -454,6 +483,8 @@ pub trait Directory: Send + Sync + 'static {
     async fn ping(&self) -> AppResult<()>;
     async fn online_players(&self) -> AppResult<u64>;
     async fn publish_listing(&self, listing: &ServerListing) -> AppResult<()>;
+    /// Persist the listing body without indexing it for browse.
+    async fn save_listing(&self, listing: &ServerListing) -> AppResult<()>;
     async fn touch_listing(&self, id: uuid::Uuid, ttl_secs: u32) -> AppResult<bool>;
     async fn remove_listing(&self, id: uuid::Uuid, peer_id: &str) -> AppResult<()>;
     async fn browse(&self, filter: &ServerFilter) -> AppResult<Vec<ServerListingSummary>>;
@@ -461,6 +492,7 @@ pub trait Directory: Send + Sync + 'static {
     async fn publish_heartbeat(&self, heartbeat: &ServerHeartbeat) -> AppResult<()>;
     async fn publish_signal(&self, peer_id: &str, envelope: &SignalingEnvelope) -> AppResult<()>;
     async fn put_code(&self, code: &str, server_id: uuid::Uuid) -> AppResult<()>;
+    async fn delete_code(&self, code: &str) -> AppResult<()>;
     async fn resolve_code(&self, code: &str) -> AppResult<Option<ServerListing>>;
     async fn add_players(&self, delta: i64) -> AppResult<i64>;
 }
@@ -477,6 +509,10 @@ impl Directory for RedisDirectory {
 
     async fn publish_listing(&self, listing: &ServerListing) -> AppResult<()> {
         RedisDirectory::publish_listing(self, listing).await
+    }
+
+    async fn save_listing(&self, listing: &ServerListing) -> AppResult<()> {
+        RedisDirectory::save_listing(self, listing).await
     }
 
     async fn touch_listing(&self, id: uuid::Uuid, ttl_secs: u32) -> AppResult<bool> {
@@ -507,6 +543,10 @@ impl Directory for RedisDirectory {
         RedisDirectory::put_code(self, code, server_id).await
     }
 
+    async fn delete_code(&self, code: &str) -> AppResult<()> {
+        RedisDirectory::delete_code(self, code).await
+    }
+
     async fn resolve_code(&self, code: &str) -> AppResult<Option<ServerListing>> {
         RedisDirectory::resolve_code(self, code).await
     }
@@ -518,18 +558,46 @@ impl Directory for RedisDirectory {
 
 /// In-process directory: same semantics, no Redis.
 ///
-/// Listings never expire (a test host stops explicitly) and browse returns
-/// everything that matches the filter.
-#[derive(Default, Clone)]
+/// Browse only returns listings passed through [`Directory::publish_listing`].
+/// [`Directory::save_listing`] keeps a body for share-code lookup without
+/// indexing it. Share codes expire `CODE_TTL_SECS` after the last `put_code`
+/// on the virtual clock ([`MemoryDirectory::advance_secs`]).
+#[derive(Clone)]
 pub struct MemoryDirectory {
     listings: std::sync::Arc<parking_lot::Mutex<std::collections::HashMap<uuid::Uuid, ServerListing>>>,
-    codes: std::sync::Arc<parking_lot::Mutex<std::collections::HashMap<String, uuid::Uuid>>>,
+    /// Ids that belong in the public browser.
+    indexed: std::sync::Arc<parking_lot::Mutex<std::collections::HashSet<uuid::Uuid>>>,
+    /// code → (server id, expiry unix seconds on the virtual clock).
+    codes: std::sync::Arc<parking_lot::Mutex<std::collections::HashMap<String, (uuid::Uuid, i64)>>>,
+    now_secs: std::sync::Arc<parking_lot::Mutex<i64>>,
     players: std::sync::Arc<std::sync::atomic::AtomicI64>,
+}
+
+impl Default for MemoryDirectory {
+    fn default() -> Self {
+        Self {
+            listings: std::sync::Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
+            indexed: std::sync::Arc::new(parking_lot::Mutex::new(std::collections::HashSet::new())),
+            codes: std::sync::Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
+            now_secs: std::sync::Arc::new(parking_lot::Mutex::new(chrono::Utc::now().timestamp())),
+            players: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        }
+    }
 }
 
 impl MemoryDirectory {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Move the directory clock forward. Used to prove a refreshed share code
+    /// still resolves after more than [`CODE_TTL_SECS`] without sleeping.
+    pub fn advance_secs(&self, secs: i64) {
+        *self.now_secs.lock() += secs;
+    }
+
+    fn now_secs(&self) -> i64 {
+        *self.now_secs.lock()
     }
 }
 
@@ -544,9 +612,13 @@ impl Directory for MemoryDirectory {
     }
 
     async fn publish_listing(&self, listing: &ServerListing) -> AppResult<()> {
-        self.listings
-            .lock()
-            .insert(listing.id, listing.clone());
+        self.listings.lock().insert(listing.id, listing.clone());
+        self.indexed.lock().insert(listing.id);
+        Ok(())
+    }
+
+    async fn save_listing(&self, listing: &ServerListing) -> AppResult<()> {
+        self.listings.lock().insert(listing.id, listing.clone());
         Ok(())
     }
 
@@ -556,13 +628,15 @@ impl Directory for MemoryDirectory {
 
     async fn remove_listing(&self, id: uuid::Uuid, _peer_id: &str) -> AppResult<()> {
         self.listings.lock().remove(&id);
+        self.indexed.lock().remove(&id);
         Ok(())
     }
 
     async fn browse(&self, filter: &ServerFilter) -> AppResult<Vec<ServerListingSummary>> {
+        let indexed = self.indexed.lock().clone();
         let mut out = Vec::new();
         for listing in self.listings.lock().values() {
-            if !filter.matches(listing) {
+            if !indexed.contains(&listing.id) || !filter.matches(listing) {
                 continue;
             }
             out.push(ServerListingSummary::from(listing));
@@ -584,14 +658,23 @@ impl Directory for MemoryDirectory {
     }
 
     async fn put_code(&self, code: &str, server_id: uuid::Uuid) -> AppResult<()> {
+        let expires_at = self.now_secs() + i64::try_from(CODE_TTL_SECS).unwrap_or(i64::MAX);
         self.codes
             .lock()
-            .insert(code.to_uppercase(), server_id);
+            .insert(code.to_uppercase(), (server_id, expires_at));
+        Ok(())
+    }
+
+    async fn delete_code(&self, code: &str) -> AppResult<()> {
+        self.codes.lock().remove(&code.to_uppercase());
         Ok(())
     }
 
     async fn resolve_code(&self, code: &str) -> AppResult<Option<ServerListing>> {
-        let id = self.codes.lock().get(&code.to_uppercase()).copied();
+        let now = self.now_secs();
+        let id = self.codes.lock().get(&code.to_uppercase()).and_then(|(id, expires_at)| {
+            (*expires_at > now).then_some(*id)
+        });
         match id {
             Some(id) => self.listing(id).await,
             None => Ok(None),
@@ -612,8 +695,8 @@ mod tests {
     use crate::models::account::AccountProvider;
     use crate::models::instance::LoaderKind;
     use crate::models::server::{
-        ConnectionDescriptor, ConnectionMode, PlayerCount, ServerOwner, WhitelistPolicy,
-        SERVER_LISTING_SCHEMA,
+        ConnectionDescriptor, ConnectionMode, PlayerCount, ServerFilter, ServerOwner,
+        WhitelistPolicy, SERVER_LISTING_SCHEMA,
     };
 
     fn listing(name: &str, online: u32) -> ServerListing {
@@ -720,6 +803,73 @@ mod tests {
 
         let auth = RedisError::from((redis::ErrorKind::AuthenticationFailed, "NOAUTH"));
         assert!(map_redis(auth).to_string().contains("password"));
+    }
+
+    #[tokio::test]
+    async fn refreshed_share_code_survives_past_one_ttl() {
+        let directory = MemoryDirectory::new();
+        let world = listing("Invite", 0);
+        directory.save_listing(&world).await.expect("save");
+        directory.put_code("SXM1-TEST", world.id).await.expect("code");
+
+        let step = i64::try_from(CODE_TTL_SECS).unwrap() - 10;
+        directory.advance_secs(step);
+        assert!(
+            directory
+                .resolve_code("sxm1-test")
+                .await
+                .expect("resolve")
+                .is_some(),
+            "code should still be inside the first TTL window"
+        );
+
+        // Heartbeat refreshes the mapping. Wall time since the first put is
+        // now longer than CODE_TTL_SECS.
+        directory.put_code("SXM1-TEST", world.id).await.expect("refresh");
+        directory.advance_secs(step);
+        let refreshed = directory
+            .resolve_code("SXM1-TEST")
+            .await
+            .expect("resolve")
+            .expect("invite stays live while the host heartbeats");
+        assert_eq!(refreshed.id, world.id);
+
+        directory.advance_secs(20);
+        assert!(
+            directory
+                .resolve_code("SXM1-TEST")
+                .await
+                .expect("resolve")
+                .is_none(),
+            "a code that is not refreshed must expire"
+        );
+    }
+
+    #[tokio::test]
+    async fn private_listing_resolves_by_code_and_stays_out_of_browse() {
+        let directory = MemoryDirectory::new();
+        let world = listing("Private", 1);
+        directory.save_listing(&world).await.expect("save");
+        directory.put_code("SXM1-PRIV", world.id).await.expect("code");
+
+        let resolved = directory
+            .resolve_code("SXM1-PRIV")
+            .await
+            .expect("resolve")
+            .expect("private invite");
+        assert_eq!(resolved.id, world.id);
+        let by_id = directory
+            .listing(world.id)
+            .await
+            .expect("listing")
+            .expect("body");
+        assert_eq!(by_id.name, "Private");
+
+        let browse = directory
+            .browse(&ServerFilter::default())
+            .await
+            .expect("browse");
+        assert!(browse.iter().all(|row| row.id != world.id));
     }
 
     #[test]
