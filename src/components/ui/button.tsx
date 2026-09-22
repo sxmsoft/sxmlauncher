@@ -7,20 +7,21 @@ import { LoaderCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-[var(--radius)] text-sm font-semibold tracking-tight outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--background)] disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0",
+  "inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-[10px] text-[13px] font-semibold outline-none transition-[background,box-shadow,filter] duration-150 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-void)] disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0",
   {
     variants: {
       variant: {
         default:
-          "bg-[var(--primary)] text-[var(--primary-foreground)] hover:brightness-105",
+          "bg-[var(--accent)] text-white shadow-[0_4px_16px_var(--accent-dim),inset_0_1px_0_rgba(255,255,255,0.15)] hover:bg-[var(--accent-soft)]",
         secondary:
-          "bg-[var(--secondary)] text-[var(--secondary-foreground)] hover:bg-[color-mix(in_oklab,var(--secondary)_80%,white)]",
+          "border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] hover:border-[var(--border-strong)] hover:bg-[var(--surface-3)]",
         outline:
-          "border border-[var(--glass-border)] bg-white/5 text-[var(--foreground)] hover:bg-white/10",
-        ghost: "text-[var(--muted-foreground)] hover:bg-white/8 hover:text-[var(--foreground)]",
+          "border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] hover:border-[var(--border-strong)] hover:bg-[var(--surface-3)]",
+        ghost: "text-[var(--text-muted)] hover:bg-[var(--accent-dim)] hover:text-[var(--text)]",
         destructive:
-          "bg-[var(--destructive)] text-[var(--destructive-foreground)] hover:brightness-110",
-        success: "bg-[var(--success)] text-[oklch(0.16_0.02_150)] hover:brightness-105",
+          "bg-[var(--destructive)] text-white hover:brightness-110",
+        success:
+          "bg-[var(--success)] text-[#052e1c] shadow-[0_4px_20px_var(--success-dim),inset_0_1px_0_rgba(255,255,255,0.3)] hover:brightness-105",
         link: "text-[var(--primary)] underline-offset-4 hover:underline",
       },
       size: {

@@ -31,8 +31,8 @@ export function ModpacksPage() {
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        title="Pack bench"
-        description="Modrinth and CurseForge packs each create their own instance. Individual mods still install into the instance you pick."
+        title="Packs"
+        description="Discover modpacks — one click creates an instance. Individual mods still install into the instance you pick."
         actions={
           <div className="flex items-center gap-2">
             <Badge variant="outline">target</Badge>

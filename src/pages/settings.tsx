@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   Bug,
@@ -8,6 +8,7 @@ import {
   Globe,
   HardDrive,
   KeyRound,
+  Palette,
   RefreshCw,
   Save,
   ScrollText,
@@ -18,6 +19,7 @@ import {
 
 import { AccountMenu } from "@/components/account/account-menu";
 import { PageHeader } from "@/components/common/page-header";
+import { AppearanceSection } from "@/components/settings/appearance-section";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -42,14 +44,32 @@ import {
   useUpdateInstaller,
   useVaultBackend,
 } from "@/hooks/queries";
+import { applyAppearance } from "@/lib/appearance";
 import { formatBytes, formatDuration, formatRelative } from "@/lib/utils";
 import { BROWSER_MODE, systemService } from "@/services";
 import { revealPath } from "@/lib/window";
 import { useUiStore, toast } from "@/stores/ui";
 import type { AppSettings, SettingsSection } from "@/types/system";
 
+function withAppearance(base: AppSettings, appearance: AppSettings): AppSettings {
+  return {
+    ...base,
+    theme: appearance.theme,
+    accent: appearance.accent,
+    uiAccent: appearance.uiAccent,
+    uiBackgroundKind: appearance.uiBackgroundKind,
+    uiBackgroundPath: appearance.uiBackgroundPath,
+    uiBackgroundOpacity: appearance.uiBackgroundOpacity,
+    uiBackgroundBlur: appearance.uiBackgroundBlur,
+    uiAnimations: appearance.uiAnimations,
+    uiCompact: appearance.uiCompact,
+    reduceMotion: appearance.reduceMotion,
+  };
+}
+
 const SECTIONS: Array<{ id: SettingsSection; label: string; icon: typeof Cog }> = [
   { id: "general", label: "General", icon: Cog },
+  { id: "appearance", label: "Appearance", icon: Palette },
   { id: "downloads", label: "Downloads", icon: HardDrive },
   { id: "defaults", label: "Game defaults", icon: Cpu },
   { id: "network", label: "Network & hosting", icon: Globe },
@@ -75,14 +95,38 @@ export function SettingsPage() {
   const setSection = useUiStore((state) => state.setSettingsSection);
 
   const [draft, setDraft] = useState<AppSettings | null>(null);
+  const draftRef = useRef<AppSettings | null>(null);
+  const saveTimer = useRef<number | null>(null);
 
   useEffect(() => {
-    if (settings) setDraft(settings);
+    if (!settings) return;
+    setDraft((current) => {
+      if (!current) return settings;
+      return withAppearance(current, settings);
+    });
   }, [settings]);
+
+  draftRef.current = draft;
 
   const dirty = draft != null && settings != null && JSON.stringify(draft) !== JSON.stringify(settings);
   const patch = (next: Partial<AppSettings>) =>
     setDraft((current) => (current ? { ...current, ...next } : current));
+
+  /**
+   * Appearance paints immediately and persists on its own, so a slider does not
+   * wait on the global Save button. Other dirty fields stay in the draft.
+   */
+  const commitAppearance = (next: Partial<AppSettings>) => {
+    const current = draftRef.current;
+    if (!current || !settings) return;
+    const merged = { ...current, ...next };
+    setDraft(merged);
+    applyAppearance(merged);
+    if (saveTimer.current != null) window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(() => {
+      save.mutate(withAppearance(settings, merged));
+    }, 280);
+  };
 
   if (isLoading || !draft) {
     return (
@@ -135,6 +179,9 @@ export function SettingsPage() {
 
         <div className="flex flex-col gap-5">
           {section === "general" ? <GeneralSection draft={draft} patch={patch} /> : null}
+          {section === "appearance" ? (
+            <AppearanceSection draft={draft} onChange={commitAppearance} />
+          ) : null}
           {section === "downloads" ? <DownloadsSection draft={draft} patch={patch} /> : null}
           {section === "defaults" ? <DefaultsSection draft={draft} patch={patch} /> : null}
           {section === "network" ? <NetworkSection draft={draft} patch={patch} /> : null}
@@ -157,16 +204,9 @@ function GeneralSection({ draft, patch }: SectionProps) {
     <>
       <Card>
         <CardHeader>
-          <CardTitle>Appearance</CardTitle>
+          <CardTitle>Window & tray</CardTitle>
         </CardHeader>
         <CardContent>
-          <SettingRow
-            title="Reduce motion"
-            description="Disables the ambient animations and progress shimmer."
-            control={
-              <Switch checked={draft.reduceMotion} onCheckedChange={(value) => patch({ reduceMotion: value })} />
-            }
-          />
           <SettingRow
             title="Minimise to the tray while a game runs"
             description="Keeps the launcher out of the way after launch."

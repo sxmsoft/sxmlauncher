@@ -29,6 +29,8 @@ interface UiState {
   addPackTargetId: string | null;
   /** Activity slide-over with the Downloads/Running lists. */
   activityOpen: boolean;
+  /** Top-bar search. Filters the instance library; no extra IPC. */
+  chromeQuery: string;
   pushToast: (tone: ToastTone, title: string, message?: string) => string;
   dismissToast: (id: string) => void;
   selectInstance: (id: string | null) => void;
@@ -36,6 +38,7 @@ interface UiState {
   setAddPackTarget: (id: string | null) => void;
   setSettingsSection: (section: SettingsSection) => void;
   setActivityOpen: (open: boolean) => void;
+  setChromeQuery: (query: string) => void;
 }
 
 const MAX_TOASTS = 4;
@@ -46,6 +49,7 @@ export const useUiStore = create<UiState>((set) => ({
   settingsSection: "general",
   addPackTargetId: null,
   activityOpen: false,
+  chromeQuery: "",
 
   pushToast: (tone, title, message) => {
     const id = `t-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -70,6 +74,7 @@ export const useUiStore = create<UiState>((set) => ({
   setSettingsSection: (section) => set({ settingsSection: section }),
 
   setActivityOpen: (open) => set({ activityOpen: open }),
+  setChromeQuery: (query) => set({ chromeQuery: query }),
   setAddPackTarget: (id) => set({ addPackTargetId: id }),
 }));
 

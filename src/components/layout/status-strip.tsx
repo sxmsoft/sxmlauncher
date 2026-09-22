@@ -49,7 +49,7 @@ export function StatusStrip() {
   const isCancelling = current != null && cancelling.includes(current.jobId);
 
   return (
-    <footer className="flex h-8 shrink-0 items-center gap-3 border-t border-white/6 px-3 text-[11px]">
+    <footer className="flex h-8 shrink-0 items-center gap-3 border-t border-[var(--border)] bg-[color-mix(in_srgb,var(--surface-1)_80%,transparent)] px-3 font-mono text-[11px]">
       {current ? (
         <div className="flex min-w-0 flex-1 items-center gap-2">
           {current.error ? (

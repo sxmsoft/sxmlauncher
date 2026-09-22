@@ -1,6 +1,8 @@
 import { useRef, useState, type DragEvent } from "react";
 
-import { CheckCircle2, ExternalLink, Palette, RefreshCw, Shrink, Upload, UserPlus } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+
+import { CheckCircle2, ExternalLink, LogOut, Palette, RefreshCw, Settings, Shrink, Upload, UserPlus } from "lucide-react";
 
 import { AccountAvatar } from "@/components/account/account-avatar";
 import { LoginDialog } from "@/components/account/login-dialog";
@@ -15,10 +17,12 @@ import {
   useActiveAccount,
   useRefreshSkin,
   useSetActiveAccount,
+  useSignOut,
   useUploadSkin,
 } from "@/hooks/queries";
 import { downscaleSkinTo64, hdSkinScale } from "@/lib/skins";
 import { openExternal } from "@/lib/window";
+import { useUiStore } from "@/stores/ui";
 import { cn } from "@/lib/utils";
 import { PROVIDER_LABEL } from "@/types/account";
 import type { AccountSummary, SkinModel, SkinUploadOutcome } from "@/types/account";
@@ -37,6 +41,8 @@ export function SkinPage() {
   const setActive = useSetActiveAccount();
   const refreshSkin = useRefreshSkin();
   const uploadSkin = useUploadSkin();
+  const signOut = useSignOut();
+  const navigate = useNavigate();
   const [loginOpen, setLoginOpen] = useState(false);
   const [preview, setPreview] = useState<AccountSummary | null>(null);
   const [uploadModel, setUploadModel] = useState<SkinModel>("classic");
@@ -242,8 +248,8 @@ export function SkinPage() {
         </div>
       ) : null}
       <PageHeader
-        title="Skin & profile"
-        description="Preview exactly what other players see, and switch which account you play as."
+        title="Profile"
+        description="Skin, account, and shortcuts."
         actions={
           <div className="flex items-center gap-2">
             {canRefreshSkin ? (
@@ -282,7 +288,7 @@ export function SkinPage() {
           }
         />
       ) : (
-        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.6fr)]">
+        <div className="grid items-start gap-5 lg:grid-cols-[300px_minmax(0,1fr)]">
           <div className="flex flex-col gap-5">
             <div
               className={cn(
@@ -416,6 +422,63 @@ export function SkinPage() {
             </Card>
           </div>
 
+          <div className="flex flex-col gap-4">
+            <Card className="flex flex-row items-center gap-3.5 p-4">
+              <div className="grid size-10 shrink-0 place-items-center rounded-[10px] border border-[var(--border)] bg-[#2f2f2f] text-[11px] font-bold text-[#00a4ef]">
+                {shown.provider === "microsoft" ? "MS" : shown.provider === "ely_by" ? "EL" : "OFF"}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold">
+                  {shown.provider === "microsoft" ? "Microsoft account connected" : PROVIDER_LABEL[shown.provider]}
+                </div>
+                <div className="mt-0.5 truncate text-xs text-[var(--text-muted)]">{shown.username}</div>
+              </div>
+              {shown.id === active.data?.id ? <Badge variant="success">Active</Badge> : <Badge variant="outline">Preview</Badge>}
+            </Card>
+
+            <div className="grid grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-2)] p-4 text-left hover:border-[var(--border-strong)] hover:bg-[var(--accent-dim)]"
+                onClick={() => fileInput.current?.click()}
+              >
+                <Upload className="mb-2 size-3.5 text-[var(--accent-soft)]" />
+                <div className="text-[13px] font-semibold">Upload skin</div>
+                <div className="text-[11px] text-[var(--text-faint)]">PNG 64×64</div>
+              </button>
+              <button
+                type="button"
+                className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-2)] p-4 text-left hover:border-[var(--border-strong)] hover:bg-[var(--accent-dim)]"
+                onClick={() => {
+                  useUiStore.getState().openSettings("appearance");
+                  void navigate("/settings");
+                }}
+              >
+                <Settings className="mb-2 size-3.5 text-[var(--accent-soft)]" />
+                <div className="text-[13px] font-semibold">Appearance</div>
+                <div className="text-[11px] text-[var(--text-faint)]">Theme and wallpaper</div>
+              </button>
+              <button
+                type="button"
+                className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-2)] p-4 text-left hover:border-[var(--border-strong)] hover:bg-[var(--accent-dim)]"
+                onClick={() => setLoginOpen(true)}
+              >
+                <UserPlus className="mb-2 size-3.5 text-[var(--accent-soft)]" />
+                <div className="text-[13px] font-semibold">Add account</div>
+                <div className="text-[11px] text-[var(--text-faint)]">Microsoft or Ely.by</div>
+              </button>
+              <button
+                type="button"
+                className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-2)] p-4 text-left hover:border-[var(--border-strong)] hover:bg-[var(--accent-dim)]"
+                onClick={() => signOut.mutate(shown.id)}
+                disabled={signOut.isPending}
+              >
+                <LogOut className="mb-2 size-3.5 text-[var(--accent-soft)]" />
+                <div className="text-[13px] font-semibold">Sign out</div>
+                <div className="text-[11px] text-[var(--text-faint)]">{PROVIDER_LABEL[shown.provider]}</div>
+              </button>
+            </div>
+
           <Card>
             <CardHeader>
               <CardTitle>Profiles</CardTitle>
@@ -481,6 +544,7 @@ export function SkinPage() {
               </p>
             </CardContent>
           </Card>
+          </div>
         </div>
       )}
 

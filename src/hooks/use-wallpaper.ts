@@ -11,17 +11,9 @@ import { useEffect } from "react";
 
 import { useQuery } from "@tanstack/react-query";
 
+import { applyAppearance } from "@/lib/appearance";
 import { qk } from "@/lib/query-client";
 import { systemService } from "@/services";
-
-const ACCENTS: Record<string, { primary: string; ring: string }> = {
-  violet: { primary: "oklch(0.62 0.21 295)", ring: "oklch(0.62 0.21 295 / 60%)" },
-  purple: { primary: "oklch(0.60 0.24 315)", ring: "oklch(0.60 0.24 315 / 60%)" },
-  fuchsia: { primary: "oklch(0.65 0.24 340)", ring: "oklch(0.65 0.24 340 / 60%)" },
-  indigo: { primary: "oklch(0.60 0.19 270)", ring: "oklch(0.60 0.19 270 / 60%)" },
-  cyan: { primary: "oklch(0.72 0.15 200)", ring: "oklch(0.72 0.15 200 / 60%)" },
-  emerald: { primary: "oklch(0.72 0.17 160)", ring: "oklch(0.72 0.17 160 / 60%)" },
-};
 
 export function useWallpaper(): void {
   const { data: settings } = useQuery({
@@ -31,14 +23,10 @@ export function useWallpaper(): void {
   });
 
   useEffect(() => {
-    const root = document.documentElement;
     const layer = document.querySelector<HTMLElement>(".app-wallpaper");
     if (!settings) return;
 
-    const accent = ACCENTS[settings.uiAccent] ?? ACCENTS.violet!;
-    root.style.setProperty("--primary", accent.primary);
-    root.style.setProperty("--ring", accent.ring);
-    root.classList.toggle("no-animations", !settings.uiAnimations || settings.reduceMotion);
+    applyAppearance(settings);
 
     if (!layer) return;
     layer.innerHTML = "";

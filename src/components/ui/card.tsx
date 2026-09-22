@@ -2,12 +2,12 @@ import * as React from "react";
 
 import { cn } from "@/lib/utils";
 
-/** Flat deck panel. Sharp corners, ink surface, copper hairline. */
+/** Soft glass panel: violet rim, backdrop blur, quiet shadow. */
 export function Card({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       className={cn(
-        "rounded-[var(--radius)] border border-[var(--border)] bg-[var(--card)] text-[var(--card-foreground)]",
+        "glass text-[var(--card-foreground)] rounded-[var(--radius)]",
         className,
       )}
       {...props}

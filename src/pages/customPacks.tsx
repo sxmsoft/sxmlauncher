@@ -2,7 +2,7 @@ import { useState } from "react";
 
 import { useNavigate } from "react-router-dom";
 
-import { Blocks, Box, Plus, Trash2 } from "lucide-react";
+import { Blocks, Plus, Trash2 } from "lucide-react";
 
 import { PageHeader } from "@/components/common/page-header";
 import { ModBrowser } from "@/components/mods/mod-browser";
@@ -40,38 +40,52 @@ function PackBrowserSection({ packId }: { packId: string }) {
 }
 
 /** One pack card in the list. */
+const PACK_COVERS = [
+  "linear-gradient(135deg, #1a0a2e 0%, #4c1d95 45%, #7c3aed 100%)",
+  "linear-gradient(160deg, #0c1a12 0%, #14532d 40%, #22c55e 100%)",
+  "linear-gradient(145deg, #1c0a0a 0%, #7f1d1d 40%, #ea580c 100%)",
+  "linear-gradient(135deg, #0a1628 0%, #1e3a8a 50%, #38bdf8 100%)",
+];
+
 function PackCard({ pack, onOpen }: { pack: CustomPack; onOpen: () => void }) {
   const remove = useDeleteCustomPack();
+  const cover = PACK_COVERS[pack.name.length % PACK_COVERS.length];
   return (
-    <Card className="flex items-center gap-3 p-3">
-      <div className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-black/30">
-        {pack.iconUrl ? (
-          <img src={pack.iconUrl} alt="" className="size-full object-cover" loading="lazy" />
-        ) : (
-          <Box className="text-muted-foreground size-5" />
-        )}
-      </div>
-      <button className="min-w-0 flex-1 text-left" onClick={onOpen}>
-        <span className="block truncate text-sm font-semibold">{pack.name}</span>
-        <span className="text-muted-foreground block truncate text-[11px]">
-          {pack.gameVersion
-            ? `${pack.gameVersion} · ${pack.loader}`
-            : "empty — open to pin mods"}
-        </span>
+    <Card className="overflow-hidden p-0">
+      <button type="button" className="block w-full text-left" onClick={onOpen}>
+        <div className="relative h-[108px]" style={{ background: cover }}>
+          {pack.iconUrl ? <img src={pack.iconUrl} alt="" className="size-full object-cover" /> : null}
+          <span className="absolute top-2.5 left-2.5 rounded-md border border-[var(--border)] bg-[color-mix(in_srgb,var(--bg-void)_70%,transparent)] px-2 py-0.5 text-[10px] font-semibold">
+            {pack.loader || "Custom"}
+          </span>
+        </div>
+        <div className="p-4">
+          <div className="truncate text-sm font-semibold">{pack.name}</div>
+          <p className="mt-1 line-clamp-2 min-h-9 text-xs text-[var(--text-muted)]">
+            {pack.gameVersion ? `${pack.gameVersion} · your pinned mods` : "Empty — open to pin mods"}
+          </p>
+          <div className="mt-3 flex items-center justify-between">
+            <Badge variant="outline">{pack.gameVersion || "draft"}</Badge>
+            <span className="text-[11px] text-[var(--text-faint)]">
+              {new Date(pack.updatedAt).toLocaleDateString()}
+            </span>
+          </div>
+        </div>
       </button>
-      <Badge variant="outline">{new Date(pack.updatedAt).toLocaleDateString()}</Badge>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label={`Delete ${pack.name}`}
-        loading={remove.isPending}
-        onClick={() => remove.mutate(pack.id)}
-      >
-        <Trash2 className="size-3.5" />
-      </Button>
-      <Button size="sm" onClick={onOpen}>
-        Open
-      </Button>
+      <div className="flex items-center justify-end gap-1 px-3 pb-3">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={`Delete ${pack.name}`}
+          loading={remove.isPending}
+          onClick={() => remove.mutate(pack.id)}
+        >
+          <Trash2 className="size-3.5" />
+        </Button>
+        <Button size="sm" onClick={onOpen}>
+          Open
+        </Button>
+      </div>
     </Card>
   );
 }
@@ -163,7 +177,7 @@ export function CustomPacksPage() {
           description="Create a pack, pin mods into it from the browser, and launch it like any other instance."
         />
       ) : (
-        <div className="grid gap-3">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {(packs.data ?? []).map((pack) => (
             <PackCard key={pack.id} pack={pack} onOpen={() => openPack(pack.id)} />
           ))}

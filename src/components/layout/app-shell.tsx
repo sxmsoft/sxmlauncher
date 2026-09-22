@@ -28,15 +28,22 @@ export function AppShell() {
 
   return (
     <TooltipProvider delayDuration={200} skipDelayDuration={300}>
-      <div className="app-aurora relative flex h-full flex-col overflow-hidden">
+      <div className="app-aurora relative flex h-full overflow-hidden">
         <div className="app-wallpaper" aria-hidden />
-        <div className="relative z-10 flex min-h-0 flex-1 flex-col">
-          <TitleBar />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute top-20 right-[12%] z-0 size-[420px] rounded-full opacity-45 blur-[40px]"
+          style={{ background: "radial-gradient(circle, var(--accent-glow), transparent 70%)" }}
+        />
+        <div className="relative z-10 flex min-h-0 min-w-0 flex-1">
           <Sidebar />
-          <main className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
-            <Outlet />
-          </main>
-          <StatusStrip />
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <TitleBar />
+            <main className="min-h-0 flex-1 overflow-y-auto px-7 py-6">
+              <Outlet />
+            </main>
+            <StatusStrip />
+          </div>
         </div>
         <ActivityPanel />
         <Toaster />

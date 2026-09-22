@@ -4,40 +4,183 @@
 /* The app is always dark; the class exists so shadcn variants keep working. */
 @custom-variant dark (&:is(.dark *));
 
-:root {
-  /* Copper-on-ink deck. Warm paper text, no purple glass. */
-  --background: oklch(0.16 0.012 70);
-  --foreground: oklch(0.95 0.02 85);
-  --card: oklch(0.21 0.014 65);
-  --card-foreground: oklch(0.95 0.02 85);
-  --popover: oklch(0.19 0.014 65);
-  --popover-foreground: oklch(0.95 0.02 85);
-  --primary: oklch(0.78 0.13 68);
-  --primary-foreground: oklch(0.18 0.03 60);
-  --secondary: oklch(0.28 0.02 60);
-  --secondary-foreground: oklch(0.94 0.02 85);
-  --muted: oklch(0.26 0.015 60);
-  --muted-foreground: oklch(0.72 0.02 75);
-  --accent: oklch(0.32 0.04 55);
-  --accent-foreground: oklch(0.96 0.02 85);
-  --destructive: oklch(0.62 0.18 28);
-  --destructive-foreground: oklch(0.98 0.01 85);
-  --success: oklch(0.74 0.12 155);
-  --warning: oklch(0.82 0.14 85);
-  --border: oklch(0.78 0.04 70 / 18%);
-  --input: oklch(0.78 0.04 70 / 16%);
-  --ring: oklch(0.78 0.13 68 / 70%);
-  --radius: 0.25rem;
+/*
+ * Nebula Vault — galactic deep purple, soft glass.
+ * Brand accent lives on --accent. shadcn's `bg-accent` maps to --accent-dim
+ * so hover surfaces stay quiet.
+ */
+:root,
+[data-theme="nebula"],
+[data-theme="custom"] {
+  --bg-void: #0b0614;
+  --surface-1: #160c24;
+  --surface-2: #1e1433;
+  --surface-3: #261b3f;
+  --surface-elevated: rgba(30, 20, 51, 0.72);
+  --border: rgba(167, 139, 250, 0.18);
+  --border-strong: rgba(167, 139, 250, 0.32);
+  --rim-light: rgba(167, 139, 250, 0.45);
+  --accent: #8b5cf6;
+  --accent-soft: #a78bfa;
+  --accent-dim: rgba(139, 92, 246, 0.22);
+  --accent-glow: rgba(139, 92, 246, 0.35);
+  --text: #f3e8ff;
+  --text-muted: #a89bb8;
+  --text-faint: #6b5f7a;
+  --success: #34d399;
+  --success-dim: rgba(52, 211, 153, 0.18);
+  --warning: #fbbf24;
+  --danger: #f87171;
+  --info: #60a5fa;
 
-  --glass-bg: var(--card);
+  --background: var(--bg-void);
+  --foreground: var(--text);
+  --card: var(--surface-2);
+  --card-foreground: var(--text);
+  --popover: var(--surface-1);
+  --popover-foreground: var(--text);
+  --primary: var(--accent);
+  --primary-foreground: #ffffff;
+  --secondary: var(--surface-3);
+  --secondary-foreground: var(--text);
+  --muted: var(--surface-2);
+  --muted-foreground: var(--text-muted);
+  --accent-foreground: #ffffff;
+  --destructive: var(--danger);
+  --destructive-foreground: #fff7f7;
+  --input: rgba(167, 139, 250, 0.22);
+  --ring: rgba(139, 92, 246, 0.6);
+  --radius: 16px;
+
+  --blur-panel: 16px;
+  --blur-strong: 20px;
+  --opacity-panel: 0.72;
+  --shadow-soft: 0 8px 32px rgba(0, 0, 0, 0.45);
+  --shadow-glow: 0 0 48px var(--accent-glow);
+  --nav-rail: 76px;
+  --topbar-h: 56px;
+  --font-scale: 1;
+  --font-ui: "Sora", "Outfit", system-ui, sans-serif;
+  --font-display: "Sora", "Outfit", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --glass-bg: var(--surface-elevated);
   --glass-border: var(--border);
-  --wall-opacity: 0.18;
-
-  --font-sans: "Figtree", "Segoe UI", system-ui, sans-serif;
-  --font-display: "Fraunces", "Iowan Old Style", Georgia, serif;
+  --wall-opacity: 0.35;
 }
 
-/* `no-animations` is set by the wallpaper hook when the user opts out. */
+[data-theme="obsidian"] {
+  --bg-void: #08080a;
+  --surface-1: #121214;
+  --surface-2: #1a1a1e;
+  --surface-3: #222228;
+  --surface-elevated: rgba(26, 26, 30, 0.78);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --rim-light: rgba(255, 255, 255, 0.2);
+  --accent: #a1a1aa;
+  --accent-soft: #d4d4d8;
+  --accent-dim: rgba(161, 161, 170, 0.2);
+  --accent-glow: rgba(161, 161, 170, 0.25);
+  --text: #fafafa;
+  --text-muted: #a1a1aa;
+  --text-faint: #71717a;
+  --input: rgba(255, 255, 255, 0.12);
+  --ring: rgba(161, 161, 170, 0.55);
+}
+
+[data-theme="aurora"] {
+  --bg-void: #041210;
+  --surface-1: #0a1f1c;
+  --surface-2: #0f2a26;
+  --surface-3: #143530;
+  --surface-elevated: rgba(15, 42, 38, 0.74);
+  --border: rgba(52, 211, 153, 0.16);
+  --border-strong: rgba(52, 211, 153, 0.28);
+  --rim-light: rgba(110, 231, 183, 0.4);
+  --accent: #10b981;
+  --accent-soft: #6ee7b7;
+  --accent-dim: rgba(16, 185, 129, 0.22);
+  --accent-glow: rgba(16, 185, 129, 0.35);
+  --text: #ecfdf5;
+  --text-muted: #9cb9b0;
+  --text-faint: #5f7a72;
+  --input: rgba(52, 211, 153, 0.22);
+  --ring: rgba(16, 185, 129, 0.55);
+}
+
+[data-theme="ember"] {
+  --bg-void: #120808;
+  --surface-1: #1c0e0c;
+  --surface-2: #261412;
+  --surface-3: #321a16;
+  --surface-elevated: rgba(38, 20, 18, 0.74);
+  --border: rgba(251, 146, 60, 0.18);
+  --border-strong: rgba(251, 146, 60, 0.3);
+  --rim-light: rgba(251, 146, 60, 0.4);
+  --accent: #f97316;
+  --accent-soft: #fdba74;
+  --accent-dim: rgba(249, 115, 22, 0.22);
+  --accent-glow: rgba(249, 115, 22, 0.35);
+  --text: #fff7ed;
+  --text-muted: #b8a89a;
+  --text-faint: #7a6b5f;
+  --input: rgba(251, 146, 60, 0.24);
+  --ring: rgba(249, 115, 22, 0.55);
+}
+
+[data-theme="frost"] {
+  --bg-void: #060b14;
+  --surface-1: #0c1422;
+  --surface-2: #121c2e;
+  --surface-3: #1a2638;
+  --surface-elevated: rgba(18, 28, 46, 0.74);
+  --border: rgba(125, 211, 252, 0.16);
+  --border-strong: rgba(125, 211, 252, 0.28);
+  --rim-light: rgba(125, 211, 252, 0.4);
+  --accent: #38bdf8;
+  --accent-soft: #7dd3fc;
+  --accent-dim: rgba(56, 189, 248, 0.22);
+  --accent-glow: rgba(56, 189, 248, 0.35);
+  --text: #f0f9ff;
+  --text-muted: #94a8b8;
+  --text-faint: #5f7280;
+  --input: rgba(125, 211, 252, 0.22);
+  --ring: rgba(56, 189, 248, 0.55);
+}
+
+[data-theme="midnight"] {
+  --bg-void: #050814;
+  --surface-1: #0a1024;
+  --surface-2: #121a36;
+  --surface-3: #1a2448;
+  --surface-elevated: rgba(18, 26, 54, 0.76);
+  --border: rgba(129, 140, 248, 0.18);
+  --border-strong: rgba(129, 140, 248, 0.3);
+  --rim-light: rgba(165, 180, 252, 0.42);
+  --accent: #6366f1;
+  --accent-soft: #a5b4fc;
+  --accent-dim: rgba(99, 102, 241, 0.22);
+  --accent-glow: rgba(99, 102, 241, 0.38);
+  --text: #eef2ff;
+  --text-muted: #a5b0d0;
+  --text-faint: #64708f;
+  --input: rgba(129, 140, 248, 0.22);
+  --ring: rgba(99, 102, 241, 0.55);
+}
+
+[data-density="compact"] {
+  --nav-rail: 64px;
+  --topbar-h: 48px;
+  --font-scale: 0.92;
+  --radius: 14px;
+}
+
+[data-density="comfortable"] {
+  --nav-rail: 76px;
+  --topbar-h: 56px;
+  --font-scale: 1;
+}
+
 .no-animations *,
 .no-animations *::before,
 .no-animations *::after {
@@ -58,8 +201,8 @@
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent-dim);
+  --color-accent-foreground: var(--text);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
   --color-success: var(--success);
@@ -68,10 +211,13 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
 
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
+  --font-sans: "Sora", "Outfit", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --radius-xl: 20px;
 
   --animate-shimmer: shimmer 2s linear infinite;
   --animate-pulse-slow: pulse 3s ease-in-out infinite;
@@ -99,9 +245,11 @@
 
   body {
     margin: 0;
-    background: var(--background);
-    color: var(--foreground);
-    font-family: var(--font-sans);
+    background: var(--bg-void);
+    color: var(--text);
+    font-family: var(--font-ui);
+    font-size: calc(14px * var(--font-scale));
+    line-height: 1.45;
     -webkit-font-smoothing: antialiased;
     overflow: hidden;
     user-select: none;
@@ -111,7 +259,6 @@
   h2,
   .font-display {
     font-family: var(--font-display);
-    font-optical-sizing: auto;
     letter-spacing: -0.02em;
   }
 
@@ -120,9 +267,14 @@
     user-select: text;
   }
 
+  :focus-visible {
+    outline: 2px solid var(--rim-light);
+    outline-offset: 2px;
+  }
+
   ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+    width: 8px;
+    height: 8px;
   }
 
   ::-webkit-scrollbar-track {
@@ -130,32 +282,18 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    background: color-mix(in oklab, white 14%, transparent);
-    border-radius: 999px;
-    border: 2px solid transparent;
-    background-clip: content-box;
-  }
-
-  ::-webkit-scrollbar-thumb:hover {
-    background: color-mix(in oklab, white 24%, transparent);
-    background-clip: content-box;
+    background: var(--border-strong);
+    border-radius: 4px;
   }
 }
 
-/* Ink canvas with a single warm wash and a ruled grid — not an aurora. */
+/* Void plus one soft accent glow — not a stacked gradient. */
 @utility app-aurora {
   background:
-    linear-gradient(180deg, oklch(0.22 0.03 70 / 55%) 0%, transparent 18%),
-    repeating-linear-gradient(
-      0deg,
-      transparent,
-      transparent 47px,
-      oklch(0.9 0.02 80 / 4%) 48px
-    ),
-    var(--background);
+    radial-gradient(ellipse 55% 42% at 82% 0%, var(--accent-glow), transparent 62%),
+    var(--bg-void);
 }
 
-/* Full-window media layer below the glass UI. Managed by `useWallpaper`. */
 @utility app-wallpaper {
   position: absolute;
   inset: 0;
@@ -164,7 +302,6 @@
   pointer-events: none;
 }
 
-/* Soft page-in animation for route content. */
 @utility page-enter {
   animation: page-in 240ms cubic-bezier(0.22, 0.9, 0.32, 1) both;
 }
@@ -172,7 +309,7 @@
 @keyframes page-in {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(6px);
   }
   to {
     opacity: 1;
@@ -181,29 +318,31 @@
 }
 
 @utility glass {
-  background: var(--card);
+  background: var(--surface-elevated);
   border: 1px solid var(--border);
-  box-shadow: none;
+  backdrop-filter: blur(var(--blur-panel)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--blur-panel)) saturate(140%);
+  box-shadow: var(--shadow-soft), inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 @utility glass-strong {
-  background: oklch(0.19 0.014 65);
-  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-2) 88%, transparent);
+  border: 1px solid var(--border-strong);
+  backdrop-filter: blur(var(--blur-strong)) saturate(160%);
+  -webkit-backdrop-filter: blur(var(--blur-strong)) saturate(160%);
 }
 
-/* Indeterminate progress shimmer used by the launch card. */
 @utility shimmer {
   background-image: linear-gradient(
     90deg,
     transparent 0%,
-    color-mix(in oklab, white 22%, transparent) 50%,
+    color-mix(in srgb, white 18%, transparent) 50%,
     transparent 100%
   );
   background-size: 200% 100%;
   animation: var(--animate-shimmer);
 }
 
-/* Region that can be dragged to move the frameless window. */
 @utility drag-region {
   -webkit-app-region: drag;
   app-region: drag;

@@ -1,17 +1,10 @@
 import { NavLink } from "react-router-dom";
 
-import { Activity, Blocks, CirclePlay, Globe, Package, Palette, Settings, UserPlus } from "lucide-react";
+import { Blocks, CirclePlay, Globe, Package, Palette, Settings } from "lucide-react";
 
-import { AccountMenu } from "@/components/account/account-menu";
-import { Badge, StatusDot } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Hint } from "@/components/ui/tooltip";
-import { useActiveAccount, useLanWorlds, useNetworkStatus } from "@/hooks/queries";
+import { useLanWorlds, useNetworkStatus } from "@/hooks/queries";
 import { cn } from "@/lib/utils";
-import { BROWSER_MODE } from "@/services";
 import { useJobsStore } from "@/stores/jobs";
-import { useSessionsStore } from "@/stores/sessions";
-import { useUiStore } from "@/stores/ui";
 
 interface NavItem {
   to: string;
@@ -21,101 +14,99 @@ interface NavItem {
 }
 
 /**
- * Four destinations instead of six: Play (instances + launch + LAN hosting),
- * Worlds (the server browser, LAN first), Modpacks (Modrinth/CurseForge),
- * Profile & Skin merged into Appearance. Settings keeps everything else.
- *
- * Fewer choices is the point: every screen the players used daily is now one
- * click away, and the rest lives inside Settings' left rail.
+ * Icon rail. Destinations stay on the existing routes: Play holds instances
+ * and launch, Worlds is the host screen, packs and profile keep their pages.
  */
 const NAV: NavItem[] = [
-  { to: "/", label: "Play", icon: CirclePlay, hint: "Instances, launch, host on LAN" },
-  { to: "/servers", label: "Worlds", icon: Globe, hint: "LAN worlds + global P2P browser" },
-  { to: "/modpacks", label: "Modpacks", icon: Package, hint: "Modrinth & CurseForge" },
-  { to: "/custom-packs", label: "Custom packs", icon: Blocks, hint: "Build and play your own modpacks" },
-  { to: "/skin", label: "Profile", icon: Palette, hint: "Account, skin & cape preview" },
-  { to: "/settings", label: "Settings", icon: Settings, hint: "Appearance, Java, fixes, network" },
+  { to: "/", label: "Play", icon: CirclePlay, hint: "Launch and instances" },
+  { to: "/modpacks", label: "Packs", icon: Package, hint: "Modrinth and CurseForge" },
+  { to: "/custom-packs", label: "Custom", icon: Blocks, hint: "Build your own modpacks" },
+  { to: "/servers", label: "Host", icon: Globe, hint: "Worlds, LAN, and join codes" },
+];
+
+const FOOT: NavItem[] = [
+  { to: "/settings", label: "Settings", icon: Settings, hint: "Appearance, Java, network" },
+  { to: "/skin", label: "Profile", icon: Palette, hint: "Account, skin and cape" },
 ];
 
 export function Sidebar() {
   const { data: status } = useNetworkStatus();
   const { data: lanWorlds } = useLanWorlds();
-  const account = useActiveAccount();
-  const hostCount = useSessionsStore((state) => Object.keys(state.hosts).length);
-  const guestCount = useSessionsStore((state) => Object.keys(state.guests).length);
-  // Selector must return a stable value: `.filter()` allocates a fresh array
-  // on every call, which re-triggers the subscription and loops React into
-  // "Maximum update depth exceeded" (#185) in production builds. A count is
-  // all this badge needs.
   const activeJobCount = useJobsStore(
     (state) => state.jobs.filter((job) => !job.finished && !job.error).length,
   );
-  const setActivityOpen = useUiStore((state) => state.setActivityOpen);
 
-  /** Live counters on just two items: nearby LAN worlds and running jobs. */
   const badgeFor = (to: string): string | null => {
     if (to === "/servers") {
-      const live = (status?.onlinePlayers ?? 0) + (lanWorlds?.length ?? 0);
+      const live = (lanWorlds?.length ?? 0) + (status?.onlinePlayers ?? 0);
       return live > 0 ? String(live) : null;
     }
+    if (to === "/" && activeJobCount > 0) return String(activeJobCount);
     return null;
   };
 
   return (
-    <nav className="no-drag flex shrink-0 items-center gap-1 overflow-x-auto border-b border-[var(--border)] bg-[oklch(0.14_0.012_70)] px-3">
-      {NAV.map((item) => (
-        <NavLink key={item.to} to={item.to} end={item.to === "/"}>
-          {({ isActive }) => (
-            <Hint label={item.hint} side="bottom">
-              <div
-                className={cn(
-                  "flex items-center gap-2 border-b-2 px-3 py-3 text-sm font-semibold",
-                  isActive
-                    ? "border-[var(--primary)] text-[var(--foreground)]"
-                    : "border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]",
-                )}
-              >
-                <item.icon className={cn("size-4", isActive && "text-[var(--primary)]")} aria-hidden />
-                <span>{item.label}</span>
-                {badgeFor(item.to) ? (
-                  <span className="text-[10px] tabular-nums text-[var(--primary)]">{badgeFor(item.to)}</span>
-                ) : null}
-              </div>
-            </Hint>
-          )}
-        </NavLink>
-      ))}
-      <button
-        type="button"
-        onClick={() => setActivityOpen(true)}
-        className="flex items-center gap-2 border-b-2 border-transparent px-3 py-3 text-sm font-semibold text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+    <nav
+      aria-label="Primary"
+      className="no-drag z-20 flex shrink-0 flex-col items-center gap-1 border-r border-[var(--border)] px-2.5 py-4"
+      style={{
+        width: "var(--nav-rail)",
+        background: "color-mix(in srgb, var(--surface-1) 88%, transparent)",
+        backdropFilter: "blur(var(--blur-panel))",
+      }}
+    >
+      <div
+        className="mb-5 grid size-10 place-items-center rounded-[11px] text-[13px] font-bold tracking-tight text-white"
+        style={{
+          background: "linear-gradient(145deg, var(--accent-soft), var(--accent))",
+          boxShadow: "0 0 20px var(--accent-dim), inset 0 1px 0 rgba(255,255,255,0.25)",
+        }}
+        title="SXMLAUNCHER"
       >
-        <Activity className="size-4" aria-hidden />
-        Activity
-        {activeJobCount > 0 ? (
-          <span className="text-[10px] tabular-nums text-[var(--primary)]">{activeJobCount}</span>
-        ) : null}
-      </button>
-
-      <div className="ml-auto flex items-center gap-2 py-2 pl-3">
-        {hostCount > 0 || guestCount > 0 ? (
-          <span className="flex items-center gap-1.5 text-xs">
-            <StatusDot tone="success" pulse />
-            {hostCount > 0 ? `${hostCount} hosting` : null}
-            {guestCount > 0 ? `${guestCount} joined` : null}
-          </span>
-        ) : null}
-        {BROWSER_MODE ? <Badge variant="warning">preview</Badge> : null}
-        {account.data ? (
-          <AccountMenu />
-        ) : (
-          <AccountMenu>
-            <Button variant="outline" size="sm">
-              <UserPlus className="size-4" /> Sign in
-            </Button>
-          </AccountMenu>
-        )}
+        SX
       </div>
+
+      {NAV.map((item) => (
+        <RailLink key={item.to} item={item} badge={badgeFor(item.to)} />
+      ))}
+
+      <div className="flex-1" />
+
+      {FOOT.map((item) => (
+        <RailLink key={item.to} item={item} badge={null} />
+      ))}
     </nav>
+  );
+}
+
+function RailLink({ item, badge }: { item: NavItem; badge: string | null }) {
+  return (
+    <NavLink to={item.to} end={item.to === "/"} title={item.hint} className="w-full">
+      {({ isActive }) => (
+        <span
+          className={cn(
+            "relative flex w-full flex-col items-center gap-1 rounded-[var(--radius-md)] px-1.5 py-2.5 text-[var(--text-muted)] transition-colors",
+            isActive
+              ? "bg-[var(--accent-dim)] text-[var(--text)] shadow-[inset_0_0_0_1px_var(--border)]"
+              : "hover:bg-[var(--accent-dim)] hover:text-[var(--text)]",
+          )}
+        >
+          {isActive ? (
+            <span
+              className="absolute top-1/2 -left-2.5 h-[22px] w-[3px] -translate-y-1/2 rounded-r-[3px] bg-[var(--accent-soft)]"
+              style={{ boxShadow: "0 0 10px var(--accent-glow)" }}
+              aria-hidden
+            />
+          ) : null}
+          <item.icon className="size-[22px]" strokeWidth={1.75} aria-hidden />
+          <span className="text-center text-[9px] leading-tight font-medium">{item.label}</span>
+          {badge ? (
+            <span className="font-mono absolute top-1 right-1 text-[9px] text-[var(--accent-soft)]">
+              {badge}
+            </span>
+          ) : null}
+        </span>
+      )}
+    </NavLink>
   );
 }

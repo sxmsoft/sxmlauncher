@@ -15,14 +15,11 @@ export function PageHeader({
   className?: string;
 }) {
   return (
-    <header className={cn("flex flex-wrap items-start justify-between gap-4", className)}>
+    <header className={cn("flex flex-wrap items-end justify-between gap-4", className)}>
       <div className="flex flex-col gap-1">
-        <p className="text-[10px] font-semibold tracking-[0.22em] text-[var(--primary)] uppercase">
-          SXMLAUNCHER
-        </p>
-        <h1 className="font-display text-4xl leading-none font-semibold">{title}</h1>
+        <h1 className="text-[22px] leading-none font-semibold tracking-[-0.02em]">{title}</h1>
         {description ? (
-          <p className="text-muted-foreground max-w-2xl text-sm">{description}</p>
+          <p className="max-w-2xl text-[13px] text-[var(--text-muted)]">{description}</p>
         ) : null}
       </div>
       {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}

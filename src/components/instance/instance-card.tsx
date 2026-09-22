@@ -1,22 +1,20 @@
 import { Download, Play, Zap } from "lucide-react";
 
 import { Badge, StatusDot } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { useInstallInstance, useLaunchInstance, useRunningInstances } from "@/hooks/queries";
-import { cn, formatBytes, formatRelative } from "@/lib/utils";
-
-const LOADER_STRIPE: Record<string, string> = {
-  vanilla: "bg-[var(--primary)]",
-  fabric: "bg-teal-400",
-  quilt: "bg-sky-300",
-  forge: "bg-orange-400",
-  neoforge: "bg-lime-300",
-};
+import { cn, formatRelative } from "@/lib/utils";
 import { useSessionsStore } from "@/stores/sessions";
-import { isPlayable, STATUS_LABEL, type Instance } from "@/types/instance";
+import { isPlayable, STATUS_LABEL, type Instance, type LoaderKind } from "@/types/instance";
 
-/** Compact tile: enough to pick an instance and start it, nothing more. */
+const COVER: Record<LoaderKind, string> = {
+  vanilla: "linear-gradient(180deg, #5a9c3a 0 38%, #8b6b3a 38% 48%, #6b5230 48%)",
+  fabric: "linear-gradient(145deg, #4c1d95 0%, #8b5cf6 45%, #2e1065 100%)",
+  quilt: "linear-gradient(180deg, #7dd3fc 0 35%, #86efac 35% 55%, #fef08a 55%)",
+  forge: "linear-gradient(145deg, #1e3a5f 0%, #3b82f6 50%, #0f172a 100%)",
+  neoforge: "linear-gradient(135deg, #312e81 0%, #6366f1 40%, #a855f7 100%)",
+};
+
+/** Library tile: pick an instance, then play it. */
 export function InstanceCard({
   instance,
   selected,
@@ -37,61 +35,72 @@ export function InstanceCard({
   const playable = isPlayable(instance);
 
   return (
-    <Card
-      className={cn(
-        "group grid cursor-pointer grid-cols-[6px_minmax(0,1fr)_auto] items-stretch overflow-hidden",
-        selected && "border-[var(--primary)]",
-      )}
+    <article
+      role="button"
+      tabIndex={0}
       onClick={onSelect}
+      onDoubleClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
+      className={cn(
+        "group glass flex min-h-[148px] cursor-pointer flex-col gap-3 rounded-[var(--radius)] p-4 text-left transition-[border-color,box-shadow,transform] duration-150",
+        selected
+          ? "border-[var(--rim-light)] shadow-[0_0_0_1px_var(--accent-dim),0_8px_28px_var(--accent-dim)]"
+          : "hover:-translate-y-px hover:border-[var(--border-strong)]",
+      )}
     >
-      <div
-        className={cn("min-h-full", LOADER_STRIPE[instance.loader.kind] ?? "bg-[var(--primary)]")}
-        aria-hidden
-      />
-      <div className="flex min-w-0 flex-col gap-1 px-4 py-3">
-        <div className="flex items-center gap-2">
-          <span className="font-display truncate text-lg leading-none">{instance.name}</span>
-          {isRunning ? <StatusDot tone="success" pulse /> : null}
-          {hosting ? (
-            <Badge variant="success">
-              <Zap className="size-3" /> host
-            </Badge>
-          ) : null}
-        </div>
-        <div className="text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-          <span className="uppercase tracking-wider">{instance.loader.kind}</span>
-          <span>{instance.gameVersion}</span>
-          <span>{instance.modCount} mods</span>
-          <span>{formatBytes(instance.sizeBytes)}</span>
-          <span>{instance.lastPlayedAt ? formatRelative(instance.lastPlayedAt) : "never played"}</span>
-          {!playable ? <Badge variant="warning">{STATUS_LABEL[instance.status]}</Badge> : null}
+      <div className="flex items-start gap-3">
+        <div
+          className="size-12 shrink-0 rounded-xl border border-[var(--border)] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
+          style={{ background: COVER[instance.loader.kind] ?? COVER.vanilla }}
+          aria-hidden
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <h3 className="truncate text-sm font-semibold">{instance.name}</h3>
+            {isRunning ? <StatusDot tone="success" pulse /> : null}
+            {hosting ? (
+              <Badge variant="success">
+                <Zap className="size-3" /> host
+              </Badge>
+            ) : null}
+          </div>
+          <p className="mt-1 truncate text-xs text-[var(--text-muted)]">
+            {instance.description || "Isolated world"}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            <span className="inline-flex h-[22px] items-center rounded-md border border-[var(--border)] bg-[var(--surface-3)] px-2 font-mono text-[11px] text-[var(--accent-soft)]">
+              {instance.gameVersion}
+            </span>
+            <span className="inline-flex h-[22px] items-center rounded-md border border-[var(--border)] bg-[var(--surface-3)] px-2 font-mono text-[11px] text-[var(--text-muted)] capitalize">
+              {instance.loader.kind}
+            </span>
+            {!playable ? <Badge variant="warning">{STATUS_LABEL[instance.status]}</Badge> : null}
+          </div>
         </div>
       </div>
-      <div className="flex items-center gap-2 pr-3" onClick={(event) => event.stopPropagation()}>
-        {playable ? (
-          <Button
-            size="sm"
-            onClick={() => launch.mutate({ id: instance.id })}
-            loading={launch.isPending}
-            disabled={isRunning}
-          >
-            <Play className="size-3.5" />
-            {isRunning ? "Running" : "Play"}
-          </Button>
-        ) : (
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() => install.mutate(instance.id)}
-            loading={install.isPending}
-          >
-            <Download className="size-3.5" /> Install
-          </Button>
-        )}
-        <Button size="sm" variant="ghost" onClick={onOpen}>
-          Open
-        </Button>
+
+      <div className="mt-auto flex items-center justify-between border-t border-[var(--border)] pt-3">
+        <span className="text-[11px] text-[var(--text-faint)]">
+          {instance.lastPlayedAt ? `Last played ${formatRelative(instance.lastPlayedAt)}` : "Never played"}
+        </span>
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            if (playable) launch.mutate({ id: instance.id });
+            else install.mutate(instance.id);
+          }}
+          className="inline-flex h-[30px] items-center gap-1 rounded-lg border border-[rgba(52,211,153,0.25)] bg-[var(--success-dim)] px-3 text-xs font-semibold text-[var(--success)] opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+        >
+          {playable ? <Play className="size-3 fill-current" /> : <Download className="size-3" />}
+          {playable ? (isRunning ? "Running" : "Play") : "Install"}
+        </button>
       </div>
-    </Card>
+    </article>
   );
 }

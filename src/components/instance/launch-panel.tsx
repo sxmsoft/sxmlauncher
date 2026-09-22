@@ -3,24 +3,23 @@ import { useMemo, useState } from "react";
 import { ChevronRight, Download, FolderOpen, Play, Settings, Square, Trash } from "lucide-react";
 
 import { HostPanel } from "@/components/instance/host-panel";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { IndeterminateProgress, Progress } from "@/components/ui/progress";
-import { Stat } from "@/components/ui/feedback";
 import { Hint } from "@/components/ui/tooltip";
 import {
   useDeleteInstance,
   useInstallInstance,
+  useInstanceMods,
   useKillInstance,
   useLaunchInstance,
   useRunningInstances,
 } from "@/hooks/queries";
-import { cn, formatBytes, formatDuration, formatRelative, loaderTone, percent } from "@/lib/utils";
+import { formatBytes, formatRelative, percent } from "@/lib/utils";
 import { revealPath } from "@/lib/window";
 import { useJobsStore } from "@/stores/jobs";
-import { isPlayable, STATUS_LABEL, STATUS_TONE, type Instance } from "@/types/instance";
+import { isPlayable, STATUS_LABEL, type Instance } from "@/types/instance";
 import { STAGE_LABEL, type ProgressEvent } from "@/types/modpack";
 
 /**
@@ -72,59 +71,101 @@ export function LaunchPanel({
 
   const busy = job != null && !job.finished && !job.error;
   const installable = !isPlayable(instance);
+  const mods = useInstanceMods(instance.id);
+  const modRows = (mods.data ?? []).slice(0, 4);
+  const ramGb = Math.max(1, Math.round(instance.memory.maxMb / 1024));
 
   return (
-    <Card className="overflow-hidden">
-      <CardHeader className="flex-row items-start justify-between gap-4">
-        <div className="flex min-w-0 flex-col gap-1">
-          <CardTitle className="truncate text-lg">{instance.name}</CardTitle>
-          <p className="text-muted-foreground truncate text-sm">
-            {instance.description || "No description"}
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Badge variant="outline">{instance.gameVersion}</Badge>
-          <Badge className={cn("border", loaderTone(instance.loader.kind))}>
-            {instance.loader.kind}
-            {instance.loader.build ? ` ${instance.loader.build}` : ""}
-          </Badge>
-          <Badge variant={instance.status === "running" ? "success" : "outline"} className={STATUS_TONE[instance.status]}>
-            {isRunning ? "playing" : STATUS_LABEL[instance.status]}
-          </Badge>
-        </div>
-      </CardHeader>
+    <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
+      <Card className="relative min-h-[320px] overflow-hidden">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0"
+          style={{
+            background:
+              "radial-gradient(ellipse 70% 60% at 70% 18%, var(--accent-glow), transparent 55%), linear-gradient(160deg, var(--surface-2), var(--surface-1))",
+          }}
+        />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0"
+          style={{
+            background: "linear-gradient(180deg, transparent 18%, color-mix(in srgb, var(--bg-void) 88%, transparent) 100%)",
+          }}
+        />
+        <div className="relative flex h-full flex-col justify-end gap-4 p-7">
+          <div className="inline-flex w-fit items-center gap-1.5 rounded-full border border-[rgba(52,211,153,0.25)] bg-[var(--success-dim)] px-2.5 py-1 text-[11px] font-medium text-[var(--success)]">
+            <span className="size-1.5 rounded-full bg-[var(--success)] shadow-[0_0_8px_var(--success)]" />
+            {isRunning ? "Playing" : installable ? STATUS_LABEL[instance.status] : "Ready"}
+          </div>
+          <div>
+            <h2 className="text-[32px] leading-none font-bold tracking-[-0.03em]">{instance.name}</h2>
+            <p className="mt-2 max-w-md text-[13px] text-[var(--text-muted)]">
+              {instance.description || "Isolated instance — its own mods, configs, and worlds."}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {isRunning ? (
+              <Button
+                variant="destructive"
+                size="lg"
+                className="h-[52px] min-w-44 rounded-xl px-7 text-[15px]"
+                onClick={() => kill.mutate(instance.id)}
+                loading={kill.isPending}
+              >
+                <Square /> Stop
+              </Button>
+            ) : installable ? (
+              <Button
+                size="lg"
+                className="h-[52px] min-w-44 rounded-xl px-7 text-[15px]"
+                onClick={() => install.mutate(instance.id)}
+                loading={install.isPending || busy}
+              >
+                <Download /> Install
+              </Button>
+            ) : (
+              <Button
+                variant="success"
+                size="lg"
+                className="h-[52px] min-w-44 rounded-xl px-7 text-[15px]"
+                onClick={() => launch.mutate({ id: instance.id })}
+                loading={launch.isPending || busy}
+              >
+                <Play className="fill-current" /> Play
+              </Button>
+            )}
+            <Button variant="outline" onClick={onOpenDetail}>
+              Mods <ChevronRight className="size-3.5" />
+            </Button>
+            <Button variant="outline" onClick={onOpenSettings}>
+              <Settings className="size-3.5" /> Settings
+            </Button>
+            <Hint label={instance.id}>
+              <Button variant="outline" onClick={() => void revealPath(instance.id)}>
+                <FolderOpen className="size-3.5" /> Open folder
+              </Button>
+            </Hint>
+            <Button
+              variant="ghost"
+              className="hover:text-[var(--destructive)]"
+              onClick={() => setConfirmRemove(true)}
+            >
+              <Trash className="size-3.5" /> Remove
+            </Button>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-x-6 gap-y-3">
+            <Meta k="Version" v={instance.gameVersion} />
+            <Meta
+              k="Loader"
+              v={`${instance.loader.kind}${instance.loader.version ? ` ${instance.loader.version}` : ""}`}
+            />
+            <Meta k="RAM" v={`${ramGb} GB`} />
+            <Meta k="Java" v={String(instance.java.preferredMajor ?? instance.requiredJavaMajor)} />
+          </div>
 
-      <CardContent className="flex flex-col gap-4">
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-          <Stat label="Mods" value={instance.modCount} />
-          <Stat label="Memory" value={`${instance.memory.maxMb / 1024} GB`} />
-          <Stat label="Playtime" value={formatDuration(instance.totalPlaytimeSecs)} />
-          <Stat label="Size" value={formatBytes(instance.sizeBytes)} />
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          <span className="text-muted-foreground">
-            Java {instance.java.preferredMajor ?? instance.requiredJavaMajor}
-          </span>
-          <span className="text-muted-foreground">·</span>
-          <span className="text-muted-foreground">
-            {instance.resolution.width}×{instance.resolution.height}
-            {instance.resolution.fullscreen ? " fullscreen" : ""}
-          </span>
-          <span className="text-muted-foreground">·</span>
-          <span className="text-muted-foreground">
-            {instance.lastPlayedAt ? `last played ${formatRelative(instance.lastPlayedAt)}` : "never played"}
-          </span>
-          {instance.sourcePack ? (
-            <>
-              <span className="text-muted-foreground">·</span>
-              <span className="text-muted-foreground">from {instance.sourcePack.name}</span>
-            </>
-          ) : null}
-        </div>
-
-        {job ? (
-          <div className="flex flex-col gap-2 rounded-xl border border-white/8 bg-black/20 p-3">
+          {job ? (
+          <div className="flex flex-col gap-2 rounded-xl border border-[var(--border)] bg-[color-mix(in_srgb,var(--bg-void)_55%,transparent)] p-3">
             <div className="flex items-center justify-between gap-3">
               <span className="text-sm font-medium">
                 {STAGE_LABEL[job.stage]} · {job.label}
@@ -153,77 +194,57 @@ export function LaunchPanel({
               <p className="text-[var(--destructive)] text-xs leading-relaxed">{job.error}</p>
             ) : null}
           </div>
-        ) : null}
-      </CardContent>
-
-      <CardFooter className="flex flex-col items-stretch gap-4">
-        <div className="flex flex-col gap-2">
-          <span className="font-display text-xl text-[var(--primary)]">Singleplayer</span>
-          <div className="flex flex-wrap items-center gap-2">
-            {isRunning ? (
-              <Button
-                variant="destructive"
-                size="xl"
-                className="min-w-40"
-                onClick={() => kill.mutate(instance.id)}
-                loading={kill.isPending}
-              >
-                <Square /> Stop
-              </Button>
-            ) : installable ? (
-              <Button
-                size="xl"
-                className="min-w-40"
-                onClick={() => install.mutate(instance.id)}
-                loading={install.isPending || busy}
-              >
-                <Download /> Install
-              </Button>
-            ) : (
-              <Button
-                size="xl"
-                className="min-w-40"
-                onClick={() => launch.mutate({ id: instance.id })}
-                loading={launch.isPending || busy}
-              >
-                <Play /> Play offline world
-              </Button>
-            )}
-            <Button variant="ghost" size="sm" onClick={onOpenDetail}>
-              Mods & world <ChevronRight className="size-3.5" />
-            </Button>
-            <Button variant="ghost" size="sm" onClick={onOpenSettings}>
-              <Settings className="size-3.5" /> Settings
-            </Button>
-            <Hint label={instance.id}>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => void revealPath(instance.id)}
-              >
-                <FolderOpen className="size-3.5" /> Folder
-              </Button>
-            </Hint>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="ml-auto hover:text-[var(--destructive)]"
-              onClick={() => setConfirmRemove(true)}
-            >
-              <Trash className="size-3.5" /> Remove
-            </Button>
-          </div>
+          ) : null}
         </div>
-      </CardFooter>
+      </Card>
 
-      <CardContent className="flex flex-col gap-2 pt-0">
-        <span className="font-display text-xl text-[var(--primary)]">Multiplayer / Host</span>
-        <p className="text-muted-foreground text-xs leading-relaxed">
-          Host starts this instance&apos;s server from the launcher, waits until a port is
-          listening, then shares a join code — friends do not need you to open LAN in-game first.
+      <div className="flex flex-col gap-3.5">
+        <Card className="p-[18px]">
+          <h3 className="mb-3.5 flex items-center justify-between text-[13px] font-semibold">
+            Mods
+            <span className="font-mono text-[11px] font-medium text-[var(--text-muted)]">{instance.modCount}</span>
+          </h3>
+          {modRows.length === 0 ? (
+            <p className="text-xs text-[var(--text-muted)]">No mods installed yet.</p>
+          ) : (
+            modRows.map((mod) => (
+              <div key={mod.projectId} className="flex items-center gap-2.5 border-b border-[var(--border)] py-2 last:border-b-0">
+                <span
+                  className="size-7 shrink-0 rounded-[7px] border border-[var(--border)]"
+                  style={{ background: "linear-gradient(135deg, var(--surface-3), var(--accent-dim))" }}
+                />
+                <span className="min-w-0 flex-1 truncate text-xs font-medium">{mod.title || mod.fileName}</span>
+                <span className="font-mono text-[10px] text-[var(--text-faint)]">
+                  {mod.enabled ? "on" : "off"}
+                </span>
+              </div>
+            ))
+          )}
+          <Button variant="outline" size="sm" className="mt-3 w-full" onClick={onOpenDetail}>
+            View all
+          </Button>
+        </Card>
+
+        <Card className="p-[18px]">
+          <h3 className="mb-3.5 text-[13px] font-semibold">Resources</h3>
+          <div className="grid grid-cols-2 gap-2.5">
+            <StatTile k="Allocated" v={`${ramGb} GB`} />
+            <StatTile
+              k="Resolution"
+              v={`${instance.resolution.width}×${instance.resolution.height}`}
+            />
+            <StatTile k="Last played" v={instance.lastPlayedAt ? formatRelative(instance.lastPlayedAt) : "Never"} />
+            <StatTile k="Size" v={formatBytes(instance.sizeBytes)} />
+          </div>
+        </Card>
+      </div>
+
+      <Card className="p-4 xl:col-span-2">
+        <p className="mb-3 text-xs leading-relaxed text-[var(--text-muted)]">
+          LAN host for this instance stays here. The global P2P directory is paused on the Host screen.
         </p>
         <HostPanel instance={instance} />
-      </CardContent>
+      </Card>
 
       <ConfirmDialog
         open={confirmRemove}
@@ -240,6 +261,24 @@ export function LaunchPanel({
           )
         }
       />
-    </Card>
+    </div>
+  );
+}
+
+function Meta({ k, v }: { k: string; v: string }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[10px] tracking-[0.08em] text-[var(--text-faint)] uppercase">{k}</span>
+      <span className="font-mono text-[13px] capitalize">{v}</span>
+    </div>
+  );
+}
+
+function StatTile({ k, v }: { k: string; v: string }) {
+  return (
+    <div className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-2)] p-3">
+      <div className="text-[10px] tracking-[0.06em] text-[var(--text-faint)] uppercase">{k}</div>
+      <div className="mt-1 font-mono text-sm font-semibold text-[var(--accent-soft)]">{v}</div>
+    </div>
   );
 }

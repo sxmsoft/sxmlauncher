@@ -16,6 +16,21 @@ function compact(value: number): string {
   return String(value);
 }
 
+const COVERS = [
+  "linear-gradient(135deg, #1a0a2e 0%, #4c1d95 40%, #7c3aed 70%, #1e1b4b 100%)",
+  "linear-gradient(160deg, #0c1a12 0%, #14532d 35%, #22c55e 60%, #052e16 100%)",
+  "linear-gradient(145deg, #1c0a0a 0%, #7f1d1d 30%, #ea580c 55%, #431407 100%)",
+  "linear-gradient(135deg, #0a1628 0%, #1e3a8a 40%, #38bdf8 65%, #0c4a6e 100%)",
+  "linear-gradient(150deg, #1a1020 0%, #831843 35%, #f472b6 55%, #4a044e 100%)",
+  "linear-gradient(135deg, #111827 0%, #374151 40%, #9ca3af 70%, #1f2937 100%)",
+];
+
+function coverFor(id: string): string {
+  let hash = 0;
+  for (let index = 0; index < id.length; index += 1) hash = (hash + id.charCodeAt(index)) % COVERS.length;
+  return COVERS[hash] ?? COVERS[0]!;
+}
+
 /** One search result, normalized across Modrinth and CurseForge. */
 export function ModCard({
   hit,
@@ -40,16 +55,17 @@ export function ModCard({
   className?: string;
 }) {
   return (
-    <Card className={cn("flex flex-col overflow-hidden", className)}>
+    <Card className={cn("flex flex-col overflow-hidden p-0", className)}>
+      <div className="relative h-[120px]" style={{ background: coverFor(hit.id) }}>
+        {hit.iconUrl ? (
+          <img src={hit.iconUrl} alt="" className="size-full object-cover" loading="lazy" />
+        ) : null}
+        <span className="absolute top-2.5 left-2.5 rounded-md border border-[var(--border)] bg-[color-mix(in_srgb,var(--bg-void)_70%,transparent)] px-2 py-0.5 text-[10px] font-semibold backdrop-blur-md">
+          {hit.loaders[0] ?? (hit.source === "modrinth" ? "Modrinth" : "CurseForge")}
+        </span>
+      </div>
       <CardContent className="flex flex-1 flex-col gap-3 p-4">
         <div className="flex items-start gap-3">
-          <div className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-black/30">
-            {hit.iconUrl ? (
-              <img src={hit.iconUrl} alt="" className="size-full object-cover" loading="lazy" />
-            ) : (
-              <span className="text-sm font-semibold">{hit.title.slice(0, 2)}</span>
-            )}
-          </div>
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
             {onOpenDetails ? (
               <button
