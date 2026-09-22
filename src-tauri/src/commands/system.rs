@@ -38,7 +38,7 @@ pub struct AppInfo {
 #[tauri::command]
 pub async fn app_info(state: State<'_, AppState>) -> AppResult<AppInfo> {
     Ok(AppInfo {
-        name: "SXMLauncher".to_string(),
+        name: "SXMLAUNCHER".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         tauri_version: tauri::VERSION.to_string(),
         rust_version: option_env!("CARGO_PKG_RUST_VERSION")

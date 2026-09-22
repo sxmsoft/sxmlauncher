@@ -378,7 +378,7 @@ pub async fn host_start(
         motd: request
             .motd
             .clone()
-            .unwrap_or_else(|| format!("{} · hosted with SXMLauncher", request.name)),
+            .unwrap_or_else(|| format!("{} · hosted with SXMLAUNCHER", request.name)),
         icon_bytes: match &request.icon_base64 {
             Some(encoded) => Some(crate::network::icon::decode_icon(encoded)?),
             None => None,

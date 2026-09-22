@@ -99,7 +99,7 @@ impl LoopbackServer {
             .map_err(|err| {
                 AppError::Account(format!(
                     "cannot bind the sign-in callback on 127.0.0.1:{port} ({err}). \
-                     Another SXMLauncher instance may already be listening there."
+                     Another SXMLAUNCHER instance may already be listening there."
                 ))
             })?;
         let bound = listener
@@ -226,7 +226,7 @@ impl LoopbackServer {
                     &mut socket,
                     400,
                     "State mismatch",
-                    "This sign-in attempt did not originate from SXMLauncher.",
+                    "This sign-in attempt did not originate from SXMLAUNCHER.",
                 )
                 .await;
                 return Err(AppError::Account(
@@ -239,7 +239,7 @@ impl LoopbackServer {
                 &mut socket,
                 200,
                 "You can close this tab",
-                "SXMLauncher is finishing your sign-in…",
+                "SXMLAUNCHER is finishing your sign-in…",
             )
             .await;
 
@@ -268,6 +268,7 @@ async fn respond(
          font-family:system-ui,-apple-system,Segoe UI,sans-serif\">\
          <main style=\"text-align:center;padding:2rem;border-radius:1rem;\
          background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08)\">\
+         <p style=\"margin:0 0 .75rem;letter-spacing:.16em;font-size:.7rem;opacity:.55\">SXMLAUNCHER</p>\
          <h1 style=\"font-size:1.25rem;font-weight:600;margin:0 0 .5rem\">{title}</h1>\
          <p style=\"margin:0;opacity:.7\">{message}</p></main></body></html>"
     );

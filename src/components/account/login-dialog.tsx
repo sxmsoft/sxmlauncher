@@ -86,8 +86,8 @@ export function LoginDialog({
         <DialogHeader>
           <DialogTitle>Account gate</DialogTitle>
           <DialogDescription>
-            Microsoft (browser or device code) and Ely.by (password or browser).
-            Skins show in the launcher after sign-in. Secrets stay in the OS vault.
+            Sign in to SXMLAUNCHER with Microsoft (browser or device code) or Ely.by
+            (password or browser). Skins show after sign-in. Secrets stay in the OS vault.
           </DialogDescription>
         </DialogHeader>
 
@@ -258,7 +258,7 @@ function DeviceCodeSection() {
   return (
     <Card className="flex flex-col gap-2 p-4">
       <span className="text-xs font-medium">
-        Enter this code at {deviceCode.verificationUri}
+        SXMLAUNCHER device code. Enter it at {deviceCode.verificationUri}
       </span>
       <Badge variant="primary" className="w-fit px-3 py-1 text-sm tracking-[0.2em]">
         {deviceCode.userCode}

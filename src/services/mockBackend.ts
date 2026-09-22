@@ -181,7 +181,7 @@ function fullListing(summary: ServerListingSummary): ServerListing {
     id: summary.id,
     name: summary.name,
     description: summary.description,
-    motd: "Hosted with SXMLauncher",
+    motd: "Hosted with SXMLAUNCHER",
     iconBase64: summary.iconBase64,
     owner: {
       name: summary.ownerName,
@@ -421,7 +421,7 @@ export function mockResponse(command: string, args?: Record<string, unknown>): u
       return null;
     case "app_info":
       return {
-        name: "SXMLauncher",
+        name: "SXMLAUNCHER",
         version: "0.1.0",
         tauriVersion: "2.x",
         rustVersion: "1.8x",

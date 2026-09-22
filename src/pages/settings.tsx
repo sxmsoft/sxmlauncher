@@ -799,7 +799,7 @@ function DiagnosticsSection() {
         </CardHeader>
         <CardContent className="text-muted-foreground flex flex-col gap-2 text-xs leading-relaxed">
           <p>
-            SXMLauncher is MIT licensed. The Rust backend is in <code>src-tauri/src</code>,
+            SXMLAUNCHER is MIT licensed. The Rust backend is in <code>src-tauri/src</code>,
             organized by domain: <code>auth</code>, <code>instances</code>, <code>mods</code>,{" "}
             <code>network</code> and <code>store</code>.
           </p>

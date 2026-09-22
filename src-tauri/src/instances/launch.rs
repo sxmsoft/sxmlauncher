@@ -178,7 +178,7 @@ impl LaunchPlanner {
                 .unwrap_or_else(|| "release".to_string()),
         );
         substitutions.insert("natives_directory", natives.to_string_lossy().into_owned());
-        substitutions.insert("launcher_name", "SXMLauncher".to_string());
+        substitutions.insert("launcher_name", "SXMLAUNCHER".to_string());
         substitutions.insert("launcher_version", env!("CARGO_PKG_VERSION").to_string());
         substitutions.insert("classpath", join_paths(&classpath));
         substitutions.insert("classpath_separator", classpath_separator().to_string());

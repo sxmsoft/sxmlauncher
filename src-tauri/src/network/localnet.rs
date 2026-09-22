@@ -105,7 +105,7 @@ impl LanBeacon {
     /// Reject anything that is not ours or is obviously malformed.
     pub fn validate(&self) -> AppResult<()> {
         if self.magic != MAGIC {
-            return Err(AppError::Transport("not a SXMLauncher LAN beacon".into()));
+            return Err(AppError::Transport("not a SXMLAUNCHER LAN beacon".into()));
         }
         if !self.query && self.port == 0 {
             return Err(AppError::Transport("LAN beacon without a port".into()));

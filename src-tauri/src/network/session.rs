@@ -83,7 +83,7 @@ impl Default for HostOptions {
         Self {
             name: "My World".into(),
             description: String::new(),
-            motd: "Hosted with SXMLauncher".into(),
+            motd: "Hosted with SXMLAUNCHER".into(),
             icon_bytes: None,
             game_version: "1.20.1".into(),
             loader: crate::models::instance::ModLoader::vanilla(),

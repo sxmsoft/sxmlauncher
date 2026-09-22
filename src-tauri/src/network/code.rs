@@ -132,7 +132,7 @@ impl ConnectCode {
         }
         if bytes[0] != CODE_VERSION {
             return Err(AppError::Transport(format!(
-                "this code was made by a newer SXMLauncher (payload version {})",
+                "this code was made by a newer SXMLAUNCHER (payload version {})",
                 bytes[0]
             )));
         }
