@@ -18,7 +18,7 @@ use crate::models::instance::{
     CreateInstanceRequest, Instance, InstanceConfig, InstancePaths, InstanceStatus, JavaSettings,
     LoaderKind, MemorySettings, ModLoader, PathExt, ResolutionSettings, UpdateInstanceRequest,
 };
-use crate::models::progress::{JobKind, JobStage, ProgressEvent, ProgressSink};
+use crate::models::progress::{InstanceBoundSink, JobKind, JobStage, ProgressEvent, ProgressSink};
 use crate::models::version::FeatureSet;
 use crate::mods::downloader::directory_size;
 use crate::mods::ModEngine;
@@ -33,12 +33,7 @@ pub struct InstanceManager {
 }
 
 impl InstanceManager {
-    pub fn new(
-        paths: AppPaths,
-        db: Database,
-        mods: Arc<ModEngine>,
-        settings: AppSettings,
-    ) -> Self {
+    pub fn new(paths: AppPaths, db: Database, mods: Arc<ModEngine>, settings: AppSettings) -> Self {
         Self {
             paths,
             db,
@@ -193,16 +188,21 @@ impl InstanceManager {
         Ok(instance)
     }
 
-    /// Install (or repair) the vanilla profile this instance needs.
+    /// Install (or repair) the vanilla game plus, when needed, its loader profile.
+    ///
+    /// The Mojang manifest is only queried with [`InstanceConfig::mojang_version_id`].
+    /// Fabric/Quilt/Forge/NeoForge ids are profiles that inherit that version.
     pub async fn install(
         &self,
-        instance: Instance,
+        mut instance: Instance,
         sink: Arc<dyn ProgressSink>,
     ) -> AppResult<Instance> {
         let id = instance.config.id;
-        self.db.set_instance_status(id, InstanceStatus::Installing)?;
+        self.db
+            .set_instance_status(id, InstanceStatus::Installing)?;
+        let sink: Arc<dyn ProgressSink> = Arc::new(InstanceBoundSink::new(sink, id));
 
-        let version_id = instance.config.resolved_version_id();
+        let game_version = instance.config.mojang_version_id().to_string();
         // One stable job id for the whole install: every report below (Java
         // provisioning, downloads, natives, assets, done) carries it, so the
         // activity panel shows ONE job progressing instead of a new
@@ -215,7 +215,11 @@ impl InstanceManager {
             )
             .for_job(job_id)
             .stage(JobStage::Resolving)
-            .detail(format!("Minecraft {} · {}", instance.config.game_version, instance.config.loader.kind.as_str())),
+            .detail(format!(
+                "Minecraft {} · {}",
+                instance.config.game_version,
+                instance.config.loader.kind.as_str()
+            )),
         )
         .await;
 
@@ -225,7 +229,13 @@ impl InstanceManager {
             &instance.config.game_version,
             instance.config.loader.kind,
         );
-        if instance.config.java.override_path.is_none() {
+        let mut java_bin = instance
+            .config
+            .java
+            .override_path
+            .clone()
+            .filter(|path| path.is_file());
+        if java_bin.is_none() {
             let allow_download =
                 self.settings.auto_provision_java && instance.config.java.auto_download;
             // `resolve_java` reuses any compatible runtime (system or managed):
@@ -250,11 +260,10 @@ impl InstanceManager {
             // even when a system JDK would have worked.
             let wants_managed = !self.settings.prefer_system_java
                 && allow_download
-                && resolved
-                    .as_ref()
-                    .is_none_or(|runtime| !runtime.is_managed);
+                && resolved.as_ref().is_none_or(|runtime| !runtime.is_managed);
             if wants_managed {
                 let managed = self.mods.java().install(required, sink.as_ref()).await?;
+                java_bin = Some(managed.path.clone());
                 sink.report(
                     ProgressEvent::started(
                         JobKind::InstanceInstall,
@@ -266,6 +275,7 @@ impl InstanceManager {
                 )
                 .await;
             } else if let Some(runtime) = resolved {
+                java_bin = Some(runtime.path.clone());
                 sink.report(
                     ProgressEvent::started(
                         JobKind::InstanceInstall,
@@ -291,7 +301,26 @@ impl InstanceManager {
             downloader,
             crate::mods::modrinth::http_client()?,
         );
-        let result = installer.install_version(&version_id, version_sink.clone()).await;
+        let result: AppResult<()> = async {
+            installer
+                .install_version(&game_version, version_sink.clone())
+                .await?;
+            if instance.config.loader.kind.is_modded() {
+                let installed = crate::instances::loaders::install_loader(
+                    &installer,
+                    &instance.config,
+                    java_bin.as_deref(),
+                    version_sink.clone(),
+                )
+                .await?;
+                instance.config.loader.version = Some(installed.version);
+                instance.config.touch();
+                self.write_config(&instance.config)?;
+                self.db.upsert_instance(&instance)?;
+            }
+            Ok(())
+        }
+        .await;
 
         if let Err(err) = &result {
             sink.report(
@@ -306,7 +335,9 @@ impl InstanceManager {
             // A failed install must not keep claiming `Installing`: the Play
             // button gates on status, and a stuck status is how the launcher
             // ends up in an endless "preparing" state.
-            let _ = self.db.set_instance_status(id, InstanceStatus::NotInstalled);
+            let _ = self
+                .db
+                .set_instance_status(id, InstanceStatus::NotInstalled);
         }
 
         result?;
@@ -333,17 +364,20 @@ impl InstanceManager {
     pub async fn refresh(&self, id: Uuid) -> AppResult<Instance> {
         let mut instance = self.get(id).await?;
         let layout = self.layout(id);
-        let version_id = instance.config.resolved_version_id();
-
+        let game_version = instance.config.mojang_version_id();
+        let profile_id = instance.config.resolved_version_id();
+        // The client jar always belongs to the plain Minecraft version. Loader
+        // profiles only add `versions/<profile>/<profile>.json`.
         let client_jar = self
             .paths
-            .version_dir(&version_id)
-            .join(format!("{version_id}.jar"));
-        let version_json = self.paths.version_json(&version_id);
+            .version_dir(game_version)
+            .join(format!("{game_version}.jar"));
+        let vanilla_json = self.paths.version_json(game_version);
+        let profile_json = self.paths.version_json(&profile_id);
 
         instance.status = if !layout.root().exists() {
             InstanceStatus::NotInstalled
-        } else if version_json.is_file() && client_jar.is_file() {
+        } else if vanilla_json.is_file() && client_jar.is_file() && profile_json.is_file() {
             InstanceStatus::Ready
         } else {
             InstanceStatus::NotInstalled
@@ -565,12 +599,39 @@ mod tests {
     use super::*;
     use crate::models::progress::NoopProgressSink;
 
+    struct LiveInstallSink;
+
+    #[async_trait::async_trait]
+    impl ProgressSink for LiveInstallSink {
+        async fn report(&self, event: ProgressEvent) {
+            if event.error.is_some()
+                || event.finished
+                || matches!(
+                    event.stage,
+                    JobStage::Resolving
+                        | JobStage::ProvisioningJava
+                        | JobStage::Extracting
+                        | JobStage::Failed
+                )
+            {
+                eprintln!(
+                    "[install] {} {:?} {} {}",
+                    event.label,
+                    event.stage,
+                    event.detail.as_deref().unwrap_or(""),
+                    event.error.as_deref().unwrap_or("")
+                );
+            }
+        }
+    }
+
     fn manager(root: &std::path::Path) -> InstanceManager {
         let paths = AppPaths::from_root(root);
         paths.ensure().expect("layout");
         let db = Database::open_in_memory().expect("db");
         let settings = AppSettings::default();
-        let engine = Arc::new(ModEngine::new(paths.clone(), db.clone(), &settings).expect("engine"));
+        let engine =
+            Arc::new(ModEngine::new(paths.clone(), db.clone(), &settings).expect("engine"));
         InstanceManager::new(paths, db, engine, settings)
     }
 
@@ -675,8 +736,11 @@ mod tests {
             .create(request("Original"), Arc::new(NoopProgressSink))
             .await
             .expect("create");
-        std::fs::write(manager.layout(instance.config.id).mods().join("a.jar"), b"jar")
-            .expect("write mod");
+        std::fs::write(
+            manager.layout(instance.config.id).mods().join("a.jar"),
+            b"jar",
+        )
+        .expect("write mod");
 
         let copy = manager
             .duplicate(instance.config.id, None)
@@ -703,7 +767,10 @@ mod tests {
             .expect("create");
 
         let root = manager.layout(instance.config.id).root();
-        manager.delete(instance.config.id, true).await.expect("delete");
+        manager
+            .delete(instance.config.id, true)
+            .await
+            .expect("delete");
 
         assert!(!root.exists());
         assert!(manager.get(instance.config.id).await.is_err());
@@ -731,19 +798,185 @@ mod tests {
             .await
             .expect("create");
 
-        let version_id = instance.config.resolved_version_id();
-        std::fs::create_dir_all(manager.paths().version_dir(&version_id)).expect("mkdir");
-        std::fs::write(manager.paths().version_json(&version_id), b"{}").expect("json");
+        let game_version = instance.config.mojang_version_id().to_string();
+        let profile_id = instance.config.resolved_version_id();
+        std::fs::create_dir_all(manager.paths().version_dir(&game_version)).expect("mkdir");
+        std::fs::create_dir_all(manager.paths().version_dir(&profile_id)).expect("mkdir");
+        std::fs::write(manager.paths().version_json(&game_version), b"{}").expect("vanilla json");
+        std::fs::write(manager.paths().version_json(&profile_id), b"{}").expect("profile json");
         std::fs::write(
             manager
                 .paths()
-                .version_dir(&version_id)
-                .join(format!("{version_id}.jar")),
+                .version_dir(&game_version)
+                .join(format!("{game_version}.jar")),
             b"jar",
         )
         .expect("jar");
 
         let refreshed = manager.refresh(instance.config.id).await.expect("refresh");
         assert_eq!(refreshed.status, InstanceStatus::Ready);
+    }
+
+    /// End-to-end install against the public meta APIs. Ignored by default
+    /// because it downloads the Minecraft client, libraries and assets.
+    #[tokio::test]
+    #[ignore = "downloads Minecraft 1.21.1 plus Fabric, Quilt, Forge and NeoForge"]
+    async fn live_modded_install_uses_the_plain_minecraft_version() {
+        let temp = tempdir();
+        let manager = manager(&temp.0);
+        for (name, kind) in [
+            ("Fabric", LoaderKind::Fabric),
+            ("Quilt", LoaderKind::Quilt),
+            ("Forge", LoaderKind::Forge),
+            ("NeoForge", LoaderKind::NeoForge),
+        ] {
+            let mut created = request(name);
+            created.game_version = "1.21.1".into();
+            created.loader = Some(ModLoader {
+                kind,
+                version: None,
+                build: None,
+            });
+            let instance = manager
+                .create(created, Arc::new(NoopProgressSink))
+                .await
+                .unwrap_or_else(|err| panic!("{name} create: {err}"));
+            let installed = manager
+                .install(instance, Arc::new(LiveInstallSink))
+                .await
+                .unwrap_or_else(|err| panic!("{name} install: {err}"));
+            assert_eq!(installed.status, InstanceStatus::Ready, "{name} status");
+            assert_eq!(installed.config.mojang_version_id(), "1.21.1");
+            assert_ne!(installed.config.resolved_version_id(), "1.21.1");
+            assert!(installed.config.loader.version.is_some(), "{name} version");
+
+            let profile_raw = std::fs::read_to_string(
+                manager
+                    .paths()
+                    .version_json(&installed.config.resolved_version_id()),
+            )
+            .unwrap_or_else(|err| panic!("{name} profile: {err}"));
+            let profile: crate::models::version::VersionJson =
+                serde_json::from_str(&profile_raw).expect("profile json");
+            assert_eq!(profile.inherits_from.as_deref(), Some("1.21.1"));
+            assert!(manager
+                .paths()
+                .version_dir("1.21.1")
+                .join("1.21.1.jar")
+                .is_file());
+
+            let vanilla_raw =
+                std::fs::read_to_string(manager.paths().version_json("1.21.1")).expect("vanilla");
+            let vanilla: crate::models::version::VersionJson =
+                serde_json::from_str(&vanilla_raw).expect("vanilla json");
+            let merged = crate::models::version::merge_profiles(&vanilla, &profile);
+            let planner =
+                crate::instances::launch::LaunchPlanner::new(manager.paths().clone(), Vec::new());
+            planner
+                .build_classpath(&merged, &manager.layout(installed.config.id).root())
+                .unwrap_or_else(|err| panic!("{name} classpath: {err}"));
+
+            let runtime = crate::mods::java_runtime::JavaRuntime {
+                path: std::path::PathBuf::from("/usr/bin/java"),
+                major: 21,
+                version: "21".into(),
+                vendor: "OpenJDK".into(),
+                is_managed: false,
+                architecture: std::env::consts::ARCH.to_string(),
+            };
+            let launching = crate::instances::launch::LaunchPlanner::new(
+                manager.paths().clone(),
+                vec![runtime],
+            );
+            let identity =
+                crate::models::account::LaunchIdentity::offline("Steve", uuid::Uuid::new_v4());
+            let plan = launching
+                .build(
+                    &installed,
+                    &merged,
+                    &identity,
+                    &crate::instances::launch::LaunchExtras::default(),
+                )
+                .unwrap_or_else(|err| panic!("{name} launch plan: {err}"));
+            assert!(
+                plan.jvm_args.iter().any(|arg| arg == "-cp"),
+                "{name} launch is missing -cp: {:?}",
+                plan.jvm_args
+            );
+            assert!(
+                plan.game_args
+                    .windows(2)
+                    .any(|pair| pair[0] == "--username" && pair[1] == "Steve"),
+                "{name} launch is missing the vanilla username arg: {:?}",
+                plan.game_args
+            );
+            let expected_main = match kind {
+                LoaderKind::Fabric | LoaderKind::Quilt => "KnotClient",
+                LoaderKind::Forge => "ForgeBootstrap",
+                LoaderKind::NeoForge => "BootstrapLauncher",
+                LoaderKind::Vanilla => "Main",
+            };
+            assert!(
+                plan.main_class.contains(expected_main),
+                "{name} main class was {}",
+                plan.main_class
+            );
+
+            let (_game, mut child) =
+                crate::instances::launch::spawn(&plan, installed.config.id, None)
+                    .await
+                    .unwrap_or_else(|err| panic!("{name} spawn: {err}"));
+            tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+            let _ = child.kill().await;
+            let log = std::fs::read_to_string(&plan.log_file).unwrap_or_default();
+            assert!(
+                log.len() > 40,
+                "{name} produced no launch log (main {})",
+                plan.main_class
+            );
+            let tail: String = log
+                .chars()
+                .rev()
+                .take(240)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
+            eprintln!("[launch] {name} log tail: {tail}");
+            if log.contains("Exception in thread") {
+                eprintln!("----- {name} launch log -----\n{log}\n----- end -----");
+                panic!("{name} crashed during launch");
+            }
+            for needle in [
+                "NoClassDefFoundError",
+                "ClassNotFoundException",
+                "Could not find or load main class",
+                "UnsupportedClassVersionError",
+            ] {
+                assert!(
+                    !log.contains(needle),
+                    "{name} failed to launch ({needle}):\n{log}"
+                );
+            }
+
+            let loader_version = installed.config.loader.version.as_deref().unwrap();
+            let patched = match kind {
+                LoaderKind::Forge => format!(
+                    "net/minecraftforge/forge/1.21.1-{loader_version}/forge-1.21.1-{loader_version}-client.jar"
+                ),
+                LoaderKind::NeoForge => format!(
+                    "net/neoforged/neoforge/{loader_version}/neoforge-{loader_version}-client.jar"
+                ),
+                _ => String::new(),
+            };
+            if !patched.is_empty() {
+                let path = manager.paths().libraries().join(&patched);
+                assert!(
+                    path.is_file(),
+                    "{name} installer did not produce {}",
+                    path.display()
+                );
+            }
+        }
     }
 }

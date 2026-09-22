@@ -364,10 +364,7 @@ pub struct Arguments {
 
 impl Arguments {
     /// Flatten the guard-laden argument lists into launch-ready strings.
-    pub fn flatten<'a>(
-        values: &'a [ArgumentValue],
-        features: &'a FeatureSet,
-    ) -> Vec<&'a str> {
+    pub fn flatten<'a>(values: &'a [ArgumentValue], features: &'a FeatureSet) -> Vec<&'a str> {
         let mut out = Vec::new();
         for entry in values {
             match entry {
@@ -473,14 +470,24 @@ impl Library {
     }
 
     /// URL to fetch the artifact from when the manifest omits `downloads`.
+    ///
+    /// An empty URL means the file is produced locally (Forge/NeoForge
+    /// installer processors, or a jar extracted from the installer). Those
+    /// must not be fetched.
     pub fn artifact_url(&self) -> Option<String> {
         if let Some(artifact) = self.downloads.as_ref().and_then(|d| d.artifact.as_ref()) {
+            if artifact.url.is_empty() {
+                return None;
+            }
             return Some(artifact.url.clone());
         }
         let base = self
             .url
             .clone()
             .unwrap_or_else(|| "https://libraries.minecraft.net/".to_string());
+        if base.is_empty() {
+            return None;
+        }
         let coordinate = MavenCoordinate::parse(&self.name).ok()?;
         Some(format!(
             "{}/{}",
@@ -526,7 +533,22 @@ impl Library {
     }
 }
 
+/// Version id whose `versions/<id>/<id>.jar` is the Mojang client.
+///
+/// A merged loader profile keeps the parent's client download but its own id.
+/// The jar still lives next to the vanilla version json (`inheritsFrom`).
+pub fn client_jar_version_id(version: &VersionJson) -> &str {
+    if version.inherits_from.is_some() {
+        return version.inherits_from.as_deref().unwrap_or(&version.id);
+    }
+    &version.id
+}
+
 /// Merge a child profile onto its parent (child wins, lists are concatenated).
+///
+/// Arguments are appended, not replaced. Fabric/Quilt/Forge profiles ship only
+/// their extra JVM or game flags and rely on the vanilla parent for `-cp` and
+/// `--username`.
 pub fn merge_profiles(parent: &VersionJson, child: &VersionJson) -> VersionJson {
     let mut merged = parent.clone();
     merged.id = child.id.clone();
@@ -543,8 +565,13 @@ pub fn merge_profiles(parent: &VersionJson, child: &VersionJson) -> VersionJson 
     if child.java_version.is_some() {
         merged.java_version = child.java_version.clone();
     }
-    if child.arguments.is_some() || child.minecraft_arguments.is_some() {
-        merged.arguments = child.arguments.clone();
+    if let Some(child_args) = &child.arguments {
+        let mut combined = merged.arguments.clone().unwrap_or_default();
+        combined.game.extend(child_args.game.iter().cloned());
+        combined.jvm.extend(child_args.jvm.iter().cloned());
+        merged.arguments = Some(combined);
+    }
+    if child.minecraft_arguments.is_some() {
         merged.minecraft_arguments = child.minecraft_arguments.clone();
     }
     // Modded profiles prepend their libraries so they shadow the vanilla ones.
@@ -618,10 +645,7 @@ mod tests {
                     os: None,
                     features: Some(HashMap::from([("has_custom_resolution".to_string(), true)])),
                 }],
-                value: ArgumentEntries::Many(vec![
-                    "--width".into(),
-                    "${resolution_width}".into(),
-                ]),
+                value: ArgumentEntries::Many(vec!["--width".into(), "${resolution_width}".into()]),
             },
         ];
         // `flatten` borrows the feature set, so the temporaries need names.
@@ -699,5 +723,90 @@ mod tests {
         assert_eq!(merged.libraries.len(), 2);
         assert!(merged.libraries[0].name.contains("fabric-loader"));
         assert_eq!(merged.assets.as_deref(), Some("5"));
+        assert_eq!(client_jar_version_id(&merged), "1.20.1");
+        assert_eq!(client_jar_version_id(&parent), "1.20.1");
+    }
+
+    #[test]
+    fn merge_appends_loader_arguments_onto_the_vanilla_ones() {
+        let parent = VersionJson {
+            id: "1.21.1".into(),
+            inherits_from: None,
+            main_class: Some("net.minecraft.client.main.Main".into()),
+            assets: None,
+            asset_index: None,
+            libraries: Vec::new(),
+            arguments: Some(Arguments {
+                game: vec![ArgumentValue::Plain("--username".into())],
+                jvm: vec![
+                    ArgumentValue::Plain("-cp".into()),
+                    ArgumentValue::Plain("${classpath}".into()),
+                ],
+            }),
+            minecraft_arguments: None,
+            downloads: None,
+            java_version: None,
+            release_time: None,
+            release_type: None,
+        };
+        let child = VersionJson {
+            id: "fabric-loader-0.19.5-1.21.1".into(),
+            inherits_from: Some("1.21.1".into()),
+            main_class: Some("net.fabricmc.loader.impl.launch.knot.KnotClient".into()),
+            assets: None,
+            asset_index: None,
+            libraries: Vec::new(),
+            arguments: Some(Arguments {
+                game: Vec::new(),
+                jvm: vec![ArgumentValue::Plain(
+                    "-DFabricMcEmu=net.minecraft.client.main.Main".into(),
+                )],
+            }),
+            minecraft_arguments: None,
+            downloads: None,
+            java_version: None,
+            release_time: None,
+            release_type: None,
+        };
+        let merged = merge_profiles(&parent, &child);
+        let features = FeatureSet::default();
+        let jvm = Arguments::flatten(&merged.arguments.as_ref().unwrap().jvm, &features);
+        let game = Arguments::flatten(&merged.arguments.as_ref().unwrap().game, &features);
+        assert_eq!(
+            jvm,
+            vec![
+                "-cp",
+                "${classpath}",
+                "-DFabricMcEmu=net.minecraft.client.main.Main"
+            ]
+        );
+        assert_eq!(game, vec!["--username"]);
+    }
+
+    #[test]
+    fn empty_artifact_url_is_not_downloaded() {
+        let library = Library {
+            name: "net.minecraftforge:forge:1.21.1-52.1.0:client".into(),
+            downloads: Some(LibraryDownloads {
+                artifact: Some(DownloadArtifact {
+                    path: Some(
+                        "net/minecraftforge/forge/1.21.1-52.1.0/forge-1.21.1-52.1.0-client.jar"
+                            .into(),
+                    ),
+                    sha1: Some("abc".into()),
+                    size: Some(1),
+                    url: String::new(),
+                }),
+                classifiers: None,
+            }),
+            natives: None,
+            rules: None,
+            extract: None,
+            url: None,
+            sha1: None,
+            clientreq: None,
+        };
+        assert!(library.artifact_url().is_none());
+        assert!(library.artifact_path(&FeatureSet::default()).is_some());
     }
 }

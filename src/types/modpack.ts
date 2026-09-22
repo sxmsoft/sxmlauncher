@@ -212,6 +212,8 @@ export interface ProgressEvent {
   finished: boolean;
   error: string | null;
   startedAtMs: number;
+  /** Instance the job belongs to, when the backend knows one. */
+  instanceId?: string | null;
 }
 
 /** Human wording for each stage shown in the launch card. */

@@ -5,6 +5,8 @@
 //! normalized [`ProgressEvent`]s on `job://progress` and the UI decides what to
 //! show.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -69,6 +71,11 @@ pub struct ProgressEvent {
     pub finished: bool,
     pub error: Option<String>,
     pub started_at_ms: i64,
+    /// Instance this job belongs to. The UI uses it to attach progress and
+    /// errors to the card that was just created, not whichever card was
+    /// selected before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<Uuid>,
 }
 
 impl ProgressEvent {
@@ -86,6 +93,7 @@ impl ProgressEvent {
             finished: false,
             error: None,
             started_at_ms: chrono::Utc::now().timestamp_millis(),
+            instance_id: None,
         }
     }
 
@@ -142,6 +150,33 @@ impl ProgressEvent {
     pub fn for_job(mut self, job_id: Uuid) -> Self {
         self.job_id = job_id;
         self
+    }
+
+    pub fn for_instance(mut self, instance_id: Uuid) -> Self {
+        self.instance_id = Some(instance_id);
+        self
+    }
+}
+
+/// Stamps every event with an instance id when the producer did not set one.
+pub struct InstanceBoundSink {
+    inner: Arc<dyn ProgressSink>,
+    instance_id: Uuid,
+}
+
+impl InstanceBoundSink {
+    pub fn new(inner: Arc<dyn ProgressSink>, instance_id: Uuid) -> Self {
+        Self { inner, instance_id }
+    }
+}
+
+#[async_trait]
+impl ProgressSink for InstanceBoundSink {
+    async fn report(&self, mut event: ProgressEvent) {
+        if event.instance_id.is_none() {
+            event.instance_id = Some(self.instance_id);
+        }
+        self.inner.report(event).await;
     }
 }
 

@@ -219,6 +219,7 @@ impl JobTracker {
                 None
             },
             started_at_ms: state.started_at_ms,
+            instance_id: None,
         }
     }
 

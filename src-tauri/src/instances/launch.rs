@@ -13,7 +13,7 @@
 //! allocated per session (never hardcoded to 25565) several sessions can be open
 //! at once without fighting over a port.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
@@ -67,8 +67,7 @@ pub struct LaunchPlan {
 impl LaunchPlan {
     /// Full argv, with the executable first (for display/diagnostics).
     pub fn command_line(&self) -> Vec<String> {
-        let mut argv =
-            Vec::with_capacity(self.jvm_args.len() + self.game_args.len() + 4);
+        let mut argv = Vec::with_capacity(self.jvm_args.len() + self.game_args.len() + 4);
         argv.push(self.java.to_string_lossy().into_owned());
         argv.extend(self.jvm_args.iter().cloned());
         argv.push(self.main_class.clone());
@@ -120,7 +119,13 @@ impl LaunchPlanner {
     ) -> AppResult<LaunchPlan> {
         let config = &instance.config;
         let root = self.paths.instance(config.id).root();
-        let natives = self.paths.natives().join(config.resolved_version_id());
+        // Natives extracted for the vanilla parent live beside that version,
+        // not beside the loader profile id.
+        let natives_id = version
+            .inherits_from
+            .as_deref()
+            .unwrap_or(version.id.as_str());
+        let natives = self.paths.natives().join(natives_id);
         let classpath = self.build_classpath(version, &root)?;
 
         if classpath.is_empty() {
@@ -146,10 +151,20 @@ impl LaunchPlanner {
         substitutions.insert("auth_player_name", identity.username.clone());
         substitutions.insert("version_name", version.id.clone());
         substitutions.insert("game_directory", root.to_string_lossy().into_owned());
-        substitutions.insert("assets_root", self.paths.shared.join("assets").to_string_lossy().into_owned());
+        substitutions.insert(
+            "assets_root",
+            self.paths
+                .shared
+                .join("assets")
+                .to_string_lossy()
+                .into_owned(),
+        );
         substitutions.insert(
             "assets_index_name",
-            version.assets.clone().unwrap_or_else(|| "legacy".to_string()),
+            version
+                .assets
+                .clone()
+                .unwrap_or_else(|| "legacy".to_string()),
         );
         substitutions.insert("auth_uuid", identity.uuid.clone());
         substitutions.insert("auth_access_token", identity.access_token.clone());
@@ -157,19 +172,16 @@ impl LaunchPlanner {
         substitutions.insert("user_type", identity.user_type.as_str().to_string());
         substitutions.insert(
             "version_type",
-            version.release_type.clone().unwrap_or_else(|| "release".to_string()),
+            version
+                .release_type
+                .clone()
+                .unwrap_or_else(|| "release".to_string()),
         );
         substitutions.insert("natives_directory", natives.to_string_lossy().into_owned());
         substitutions.insert("launcher_name", "SXMLauncher".to_string());
-        substitutions.insert(
-            "launcher_version",
-            env!("CARGO_PKG_VERSION").to_string(),
-        );
+        substitutions.insert("launcher_version", env!("CARGO_PKG_VERSION").to_string());
         substitutions.insert("classpath", join_paths(&classpath));
-        substitutions.insert(
-            "classpath_separator",
-            classpath_separator().to_string(),
-        );
+        substitutions.insert("classpath_separator", classpath_separator().to_string());
         substitutions.insert(
             "library_directory",
             self.paths.libraries().to_string_lossy().into_owned(),
@@ -184,7 +196,14 @@ impl LaunchPlanner {
             extras
                 .quick_play_world
                 .as_ref()
-                .map(|_| self.paths.root.join("quickPlay").join("quickPlayLog.json").to_string_lossy().into_owned())
+                .map(|_| {
+                    self.paths
+                        .root
+                        .join("quickPlay")
+                        .join("quickPlayLog.json")
+                        .to_string_lossy()
+                        .into_owned()
+                })
                 .unwrap_or_default(),
         );
         substitutions.insert(
@@ -232,6 +251,34 @@ impl LaunchPlanner {
         }
         jvm.extend(config.java.jvm_args.iter().cloned());
 
+        // Loader profiles often add module-path flags and inherit `-cp` from
+        // the vanilla parent. If a profile replaced the JVM args entirely,
+        // the game still needs the assembled classpath.
+        if !jvm.iter().any(|arg| arg == "-cp" || arg == "-classpath") {
+            jvm.push("-cp".to_string());
+            jvm.push(join_paths(&classpath));
+        }
+
+        // NeoForge scans the classpath as JPMS modules. The vanilla client jar
+        // (`1.21.1.jar`) becomes an automatic module that collides with the
+        // slim `minecraft` module the installer produced. Their ignore list
+        // names `${version_name}.jar`, which is the loader profile id, not
+        // the inherited client jar, so add that filename explicitly.
+        let client_jar_name = format!(
+            "{}.jar",
+            crate::models::version::client_jar_version_id(version)
+        );
+        for arg in &mut jvm {
+            let Some(list) = arg.strip_prefix("-DignoreList=") else {
+                continue;
+            };
+            if list.split(',').any(|item| item == client_jar_name) {
+                continue;
+            }
+            arg.push(',');
+            arg.push_str(&client_jar_name);
+        }
+
         // --- main class & game arguments -----------------------------------
         let main_class = version.main_class.clone().ok_or_else(|| {
             AppError::Config(format!(
@@ -241,10 +288,12 @@ impl LaunchPlanner {
         })?;
 
         let mut game: Vec<String> = match (&version.arguments, &version.minecraft_arguments) {
-            (Some(arguments), _) if !arguments.game.is_empty() => Arguments::flatten(&arguments.game, &features)
-                .into_iter()
-                .map(|token| substitute(token, &substitutions))
-                .collect(),
+            (Some(arguments), _) if !arguments.game.is_empty() => {
+                Arguments::flatten(&arguments.game, &features)
+                    .into_iter()
+                    .map(|token| substitute(token, &substitutions))
+                    .collect()
+            }
             // Pre-1.13: a single flat string with ${...} placeholders.
             (_, Some(legacy)) => legacy
                 .split_whitespace()
@@ -276,9 +325,14 @@ impl LaunchPlanner {
     }
 
     /// Libraries + the client jar, in the order the version json declares them.
-    pub fn build_classpath(&self, version: &VersionJson, instance_root: &Path) -> AppResult<Vec<PathBuf>> {
+    pub fn build_classpath(
+        &self,
+        version: &VersionJson,
+        instance_root: &Path,
+    ) -> AppResult<Vec<PathBuf>> {
         let features = FeatureSet::default();
         let mut classpath = Vec::new();
+        let mut seen = HashSet::new();
 
         for library in &version.libraries {
             if !library.is_applicable(&features) {
@@ -293,7 +347,11 @@ impl LaunchPlanner {
             };
             let path = self.paths.libraries().join(relative);
             if path.is_file() {
-                classpath.push(path);
+                // Inherited profiles repeat vanilla libraries. NeoForge's
+                // bootstrap launcher rejects a classpath that lists one jar twice.
+                if seen.insert(path.clone()) {
+                    classpath.push(path);
+                }
             } else {
                 // A missing library means a broken install; fail loudly instead
                 // of launching into a NoClassDefFoundError.
@@ -304,14 +362,14 @@ impl LaunchPlanner {
             }
         }
 
+        let client_id = crate::models::version::client_jar_version_id(version);
         let client_jar = self
             .paths
-            .version_dir(&version.id)
-            .join(format!("{}.jar", version.id));
+            .version_dir(client_id)
+            .join(format!("{client_id}.jar"));
         if !client_jar.is_file() {
             return Err(AppError::Java(format!(
-                "missing client jar for {} — repair the instance install",
-                version.id
+                "missing client jar for {client_id} — repair the instance install",
             )));
         }
         classpath.push(client_jar);
@@ -598,5 +656,92 @@ mod tests {
             let sep = classpath_separator();
             format!("a{sep}b")
         });
+    }
+
+    #[test]
+    fn neoforge_ignore_list_includes_the_inherited_client_jar() {
+        let root =
+            std::env::temp_dir().join(format!("sxm-ignore-{}", uuid::Uuid::new_v4().simple()));
+        let paths = AppPaths::from_root(&root);
+        paths.ensure().expect("layout");
+        let client = paths.version_dir("1.21.1").join("1.21.1.jar");
+        std::fs::create_dir_all(client.parent().unwrap()).unwrap();
+        std::fs::write(&client, b"jar").unwrap();
+
+        let now = chrono::Utc::now();
+        let id = uuid::Uuid::new_v4();
+        let mut java = crate::models::instance::JavaSettings::default();
+        java.override_path = Some(PathBuf::from("/usr/bin/java"));
+        let instance = crate::models::instance::Instance {
+            config: crate::models::instance::InstanceConfig {
+                id,
+                name: "Neo".into(),
+                description: String::new(),
+                icon: None,
+                game_version: "1.21.1".into(),
+                loader: crate::models::instance::ModLoader::new(
+                    crate::models::instance::LoaderKind::NeoForge,
+                    "21.1.251",
+                ),
+                java,
+                memory: crate::models::instance::MemorySettings::default(),
+                resolution: crate::models::instance::ResolutionSettings::default(),
+                game_args: Vec::new(),
+                source_pack: None,
+                created_at: now,
+                updated_at: now,
+            },
+            status: crate::models::instance::InstanceStatus::Ready,
+            mod_count: 0,
+            last_played_at: None,
+            total_playtime_secs: 0,
+            launch_count: 0,
+            size_bytes: 0,
+            required_java_major: 21,
+        };
+        let version = VersionJson {
+            id: "neoforge-21.1.251".into(),
+            inherits_from: Some("1.21.1".into()),
+            main_class: Some("cpw.mods.bootstraplauncher.BootstrapLauncher".into()),
+            assets: None,
+            asset_index: None,
+            libraries: Vec::new(),
+            arguments: Some(Arguments {
+                jvm: vec![crate::models::version::ArgumentValue::Plain(
+                    "-DignoreList=client-extra,${version_name}.jar".into(),
+                )],
+                game: vec![crate::models::version::ArgumentValue::Plain(
+                    "--username".into(),
+                )],
+            }),
+            minecraft_arguments: None,
+            downloads: None,
+            java_version: None,
+            release_time: None,
+            release_type: None,
+        };
+
+        let plan = LaunchPlanner::new(paths, Vec::new())
+            .build(
+                &instance,
+                &version,
+                &LaunchIdentity::offline("Steve", uuid::Uuid::nil()),
+                &LaunchExtras::default(),
+            )
+            .expect("plan");
+        let ignore = plan
+            .jvm_args
+            .iter()
+            .find(|arg| arg.starts_with("-DignoreList="))
+            .expect("ignore list");
+        assert!(
+            ignore.split(',').any(|item| item == "1.21.1.jar"),
+            "inherited client jar must be ignored by BootstrapLauncher, got {ignore}"
+        );
+        assert!(
+            ignore.contains("neoforge-21.1.251.jar"),
+            "profile id stays on the ignore list, got {ignore}"
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 }

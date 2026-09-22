@@ -17,6 +17,10 @@ pub enum LoaderKind {
     Fabric,
     Quilt,
     Forge,
+    /// Wire name is `neoforge` (the UI and Modrinth/CurseForge ids).
+    /// `neo_forge` is accepted so profiles written by the previous serde
+    /// rename still load.
+    #[serde(rename = "neoforge", alias = "neo_forge")]
     NeoForge,
 }
 
@@ -37,7 +41,7 @@ impl LoaderKind {
             "fabric" => Some(LoaderKind::Fabric),
             "quilt" => Some(LoaderKind::Quilt),
             "forge" => Some(LoaderKind::Forge),
-            "neoforge" => Some(LoaderKind::NeoForge),
+            "neoforge" | "neo_forge" | "neo-forge" => Some(LoaderKind::NeoForge),
             _ => None,
         }
     }
@@ -75,7 +79,12 @@ impl ModLoader {
         }
     }
 
-    /// The version id used for `versions/<id>/<id>.json`.
+    /// Profile id under `versions/<id>/<id>.json`.
+    ///
+    /// This is a loader profile id, not a Mojang manifest id. Vanilla is the
+    /// plain game version. A modded loader whose version has not been resolved
+    /// yet returns a placeholder (`fabric-1.21.1`) that must never be looked
+    /// up in Mojang's manifest — install the game version, then this profile.
     pub fn version_id(&self, game_version: &str) -> String {
         match (self.kind, self.version.as_deref()) {
             (LoaderKind::Vanilla, _) => game_version.to_string(),
@@ -148,7 +157,10 @@ impl MemorySettings {
         const FLOOR_MB: u32 = 512;
         let max = self.max_mb.clamp(FLOOR_MB, 128 * 1024);
         let min = self.min_mb.clamp(FLOOR_MB, max);
-        Self { min_mb: min, max_mb: max }
+        Self {
+            min_mb: min,
+            max_mb: max,
+        }
     }
 }
 
@@ -193,7 +205,16 @@ pub struct InstanceConfig {
 }
 
 impl InstanceConfig {
-    /// The version folder this instance resolves against.
+    /// Minecraft version id that exists in Mojang's version manifest.
+    ///
+    /// Loader install never substitutes this. `fabric-1.21.1` is a profile id,
+    /// not a Mojang version.
+    pub fn mojang_version_id(&self) -> &str {
+        &self.game_version
+    }
+
+    /// The version folder this instance resolves against once the loader
+    /// version is known. For vanilla this is [`Self::mojang_version_id`].
     pub fn resolved_version_id(&self) -> String {
         self.loader.version_id(&self.game_version)
     }
@@ -367,5 +388,114 @@ pub trait PathExt {
 impl PathExt for Path {
     fn ensure_dir(&self) -> crate::error::AppResult<()> {
         std::fs::create_dir_all(self).map_err(crate::error::AppError::from)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(loader: ModLoader) -> InstanceConfig {
+        let now = Utc::now();
+        InstanceConfig {
+            id: Uuid::new_v4(),
+            name: "Sky".into(),
+            description: String::new(),
+            icon: None,
+            game_version: "1.21.1".into(),
+            loader,
+            java: JavaSettings::default(),
+            memory: MemorySettings::default(),
+            resolution: ResolutionSettings::default(),
+            game_args: Vec::new(),
+            source_pack: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn neoforge_serializes_as_neoforge_and_accepts_the_old_name() {
+        assert_eq!(
+            serde_json::to_string(&LoaderKind::NeoForge).unwrap(),
+            "\"neoforge\""
+        );
+        assert_eq!(
+            serde_json::from_str::<LoaderKind>("\"neoforge\"").unwrap(),
+            LoaderKind::NeoForge
+        );
+        assert_eq!(
+            serde_json::from_str::<LoaderKind>("\"neo_forge\"").unwrap(),
+            LoaderKind::NeoForge
+        );
+        let loader: ModLoader =
+            serde_json::from_str(r#"{"kind":"neoforge","version":null,"build":null}"#).unwrap();
+        assert_eq!(loader.kind, LoaderKind::NeoForge);
+        let legacy: ModLoader =
+            serde_json::from_str(r#"{"kind":"neo_forge","version":"21.1.1","build":null}"#)
+                .unwrap();
+        assert_eq!(legacy.kind, LoaderKind::NeoForge);
+        assert_eq!(
+            LoaderKind::from_str_opt("neo_forge"),
+            Some(LoaderKind::NeoForge)
+        );
+        assert_eq!(
+            LoaderKind::from_str_opt("neoforge"),
+            Some(LoaderKind::NeoForge)
+        );
+    }
+
+    #[test]
+    fn mojang_manifest_id_is_the_plain_game_version() {
+        let vanilla = config(ModLoader::vanilla());
+        assert_eq!(vanilla.mojang_version_id(), "1.21.1");
+        assert_eq!(vanilla.resolved_version_id(), "1.21.1");
+
+        let unresolved = config(ModLoader {
+            kind: LoaderKind::Fabric,
+            version: None,
+            build: None,
+        });
+        assert_eq!(unresolved.mojang_version_id(), "1.21.1");
+        assert_eq!(unresolved.resolved_version_id(), "fabric-1.21.1");
+        assert_ne!(
+            unresolved.resolved_version_id(),
+            unresolved.mojang_version_id()
+        );
+
+        assert_eq!(
+            ModLoader::new(LoaderKind::Fabric, "0.19.5").version_id("1.21.1"),
+            "fabric-loader-0.19.5-1.21.1"
+        );
+        assert_eq!(
+            ModLoader::new(LoaderKind::Quilt, "0.24.0").version_id("1.21.1"),
+            "quilt-loader-0.24.0-1.21.1"
+        );
+        assert_eq!(
+            ModLoader::new(LoaderKind::Forge, "52.1.0").version_id("1.21.1"),
+            "1.21.1-forge-52.1.0"
+        );
+        assert_eq!(
+            ModLoader::new(LoaderKind::NeoForge, "21.1.251").version_id("1.21.1"),
+            "neoforge-21.1.251"
+        );
+        for kind in [
+            LoaderKind::Fabric,
+            LoaderKind::Quilt,
+            LoaderKind::Forge,
+            LoaderKind::NeoForge,
+        ] {
+            let profile = config(ModLoader {
+                kind,
+                version: None,
+                build: None,
+            });
+            assert_eq!(profile.mojang_version_id(), "1.21.1");
+            assert!(
+                profile.resolved_version_id().contains(kind.as_str())
+                    || kind == LoaderKind::NeoForge
+            );
+            assert_ne!(profile.resolved_version_id(), "1.21.1");
+        }
     }
 }

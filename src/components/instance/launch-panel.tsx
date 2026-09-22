@@ -54,19 +54,19 @@ export function LaunchPanel({
     [running, instance.id],
   );
 
-  // Newest job that could plausibly belong to this instance. The backend's event
-  // carries no instance id (jobs are subsystem-scoped), so the card shows the
-  // most recent launch/install job — which is exactly what the user just did.
+  // Only the job for this instance. A create-then-install used to paint the
+  // failure on whichever card was selected before.
   const job: ProgressEvent | null = useMemo(
     () =>
       jobs.find(
         (entry) =>
-          entry.kind === "instance_install" ||
-          entry.kind === "launch" ||
-          entry.kind === "asset_hydration" ||
-          entry.kind === "java_runtime",
+          entry.instanceId === instance.id &&
+          (entry.kind === "instance_install" ||
+            entry.kind === "launch" ||
+            entry.kind === "asset_hydration" ||
+            entry.kind === "java_runtime"),
       ) ?? null,
-    [jobs],
+    [jobs, instance.id],
   );
 
   const busy = job != null && !job.finished && !job.error;

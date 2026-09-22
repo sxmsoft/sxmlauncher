@@ -155,7 +155,10 @@ impl Downloader {
                         sha1: Some(expected.clone()),
                     });
                 }
-            } else if task.expected_size.is_none_or(|size| file_size(&task.destination) == size) {
+            } else if task
+                .expected_size
+                .is_none_or(|size| file_size(&task.destination) == size)
+            {
                 let bytes = file_size(&task.destination);
                 tracker.advance(bytes).await;
                 return Ok(DownloadOutcome {
@@ -229,22 +232,20 @@ impl Downloader {
                     let base = 500u64 * (1 << attempt);
                     let jitter = rand::thread_rng().gen_range(0..=250);
                     tokio::time::sleep(Duration::from_millis(base + jitter)).await;
-                    tracker
-                        .set_detail(format!(
-                            "retrying {} (attempt {}/{})",
-                            task.label,
-                            attempt + 2,
-                            self.attempts
-                        ));
+                    tracker.set_detail(format!(
+                        "retrying {} (attempt {}/{})",
+                        task.label,
+                        attempt + 2,
+                        self.attempts
+                    ));
                     last_error = Some(err);
                 }
                 Err(err) => return Err(err),
             }
         }
 
-        Err(last_error.unwrap_or_else(|| {
-            AppError::Network(format!("gave up downloading {}", task.label))
-        }))
+        Err(last_error
+            .unwrap_or_else(|| AppError::Network(format!("gave up downloading {}", task.label))))
     }
 
     /// Fetch a batch concurrently, returning every outcome in input order.
@@ -260,6 +261,12 @@ impl Downloader {
             .filter_map(|task| task.expected_size)
             .sum::<u64>()
             .max(1);
+
+        let mut seen_destinations = std::collections::HashSet::new();
+        let tasks: Vec<DownloadTask> = tasks
+            .into_iter()
+            .filter(|task| seen_destinations.insert(task.destination.clone()))
+            .collect();
 
         let tracker = Arc::new(JobTracker::start(
             kind,
@@ -298,13 +305,14 @@ impl Downloader {
     }
 
     /// One download attempt: stream to `.part`, verify, then rename.
-    async fn attempt(
-        &self,
-        task: &DownloadTask,
-        tracker: Arc<JobTracker>,
-    ) -> AppResult<u64> {
+    async fn attempt(&self, task: &DownloadTask, tracker: Arc<JobTracker>) -> AppResult<u64> {
         if let Some(parent) = task.destination.parent() {
-            tokio::fs::create_dir_all(parent).await?;
+            tokio::fs::create_dir_all(parent).await.map_err(|err| {
+                AppError::Io(std::io::Error::other(format!(
+                    "creating {}: {err}",
+                    parent.display()
+                )))
+            })?;
         }
         let partial = partial_path(&task.destination);
         let _ = tokio::fs::remove_file(&partial).await;
@@ -332,7 +340,33 @@ impl Downloader {
         let mut hasher = Sha1::new();
         let mut sha256_hasher = task.expected_sha256.as_ref().map(|_| Sha256::new());
 
-        let mut file = tokio::fs::File::create(&partial).await?;
+        // Parallel installs create the same parent at once. A second create can
+        // observe ENOENT until that parent is visible, so retry once.
+        let mut file = match tokio::fs::File::create(&partial).await {
+            Ok(file) => file,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                if let Some(parent) = partial.parent() {
+                    tokio::fs::create_dir_all(parent).await.map_err(|err| {
+                        AppError::Io(std::io::Error::other(format!(
+                            "creating {}: {err}",
+                            parent.display()
+                        )))
+                    })?;
+                }
+                tokio::fs::File::create(&partial).await.map_err(|err| {
+                    AppError::Io(std::io::Error::other(format!(
+                        "creating {}: {err}",
+                        partial.display()
+                    )))
+                })?
+            }
+            Err(err) => {
+                return Err(AppError::Io(std::io::Error::other(format!(
+                    "creating {}: {err}",
+                    partial.display()
+                ))))
+            }
+        };
         let mut stream = response.bytes_stream();
 
         while let Some(chunk) = stream.next().await {
@@ -394,7 +428,15 @@ impl Downloader {
             }
         }
 
-        tokio::fs::rename(&partial, &task.destination).await?;
+        tokio::fs::rename(&partial, &task.destination)
+            .await
+            .map_err(|err| {
+                AppError::Io(std::io::Error::other(format!(
+                    "renaming {} to {}: {err}",
+                    partial.display(),
+                    task.destination.display()
+                )))
+            })?;
 
         // Populate the content cache for the next instance that needs this file.
         if task.use_cache && written >= IN_MEMORY_THRESHOLD {
@@ -485,6 +527,10 @@ fn partial_path(destination: &Path) -> PathBuf {
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "download".to_string());
+    // Unique per attempt so two workers fetching one object cannot delete
+    // each other's in-progress file out from under the rename.
+    name.push('.');
+    name.push_str(&uuid::Uuid::new_v4().simple().to_string());
     name.push_str(".part");
     destination.with_file_name(name)
 }
@@ -533,13 +579,24 @@ pub fn sha256_file(path: &Path) -> AppResult<String> {
 /// Hard-link when possible (same volume, instant), else copy.
 async fn link_or_copy(from: &Path, to: &Path) -> AppResult<()> {
     if let Some(parent) = to.parent() {
-        tokio::fs::create_dir_all(parent).await?;
+        tokio::fs::create_dir_all(parent).await.map_err(|err| {
+            AppError::Io(std::io::Error::other(format!(
+                "creating {}: {err}",
+                parent.display()
+            )))
+        })?;
     }
     let _ = tokio::fs::remove_file(to).await;
     if tokio::fs::hard_link(from, to).await.is_ok() {
         return Ok(());
     }
-    tokio::fs::copy(from, to).await?;
+    tokio::fs::copy(from, to).await.map_err(|err| {
+        AppError::Io(std::io::Error::other(format!(
+            "copying {} to {}: {err}",
+            from.display(),
+            to.display()
+        )))
+    })?;
     Ok(())
 }
 
@@ -623,7 +680,10 @@ mod tests {
 
         let path = dl.cache_path("abcdef1234567890");
         let text = path.to_string_lossy().replace('\\', "/");
-        assert!(text.ends_with("/ab/cdef1234567890"), "unexpected layout: {text}");
+        assert!(
+            text.ends_with("/ab/cdef1234567890"),
+            "unexpected layout: {text}"
+        );
 
         // The same digest in a different case must resolve to one file.
         assert_eq!(dl.cache_path("ABcdef1234567890"), path);
@@ -645,8 +705,16 @@ mod tests {
 
     #[test]
     fn partial_paths_are_siblings_of_the_target() {
-        let partial = partial_path(Path::new("/x/mods/sodium.jar"));
-        assert_eq!(partial.to_string_lossy().replace('\\', "/"), "/x/mods/sodium.jar.part");
+        let destination = Path::new("/x/mods/sodium.jar");
+        let partial = partial_path(destination);
+        let text = partial.to_string_lossy().replace('\\', "/");
+        assert_eq!(partial.parent(), destination.parent());
+        assert!(
+            text.starts_with("/x/mods/sodium.jar.") && text.ends_with(".part"),
+            "unexpected partial path: {text}"
+        );
+        // Concurrent downloads of one object must not share a partial file.
+        assert_ne!(partial_path(destination), partial);
     }
 
     #[test]

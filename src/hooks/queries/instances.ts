@@ -22,13 +22,20 @@ export function useInstances() {
   const query = useQuery({ queryKey: qk.instances, queryFn: instanceService.list });
 
   // Keep a valid selection at all times: the Dashboard's Play card needs one.
+  // A just-created id is written into the cache before this effect runs, so a
+  // stale list must not snap the selection back to the previous first card.
   useEffect(() => {
     const instances = query.data;
     if (!instances || instances.length === 0) return;
-    if (!selected || !instances.some((entry) => entry.id === selected)) {
+    if (!selected) {
+      select(instances[0]!.id);
+      return;
+    }
+    if (instances.some((entry) => entry.id === selected)) return;
+    if (!query.isFetching) {
       select(instances[0]!.id);
     }
-  }, [query.data, selected, select]);
+  }, [query.data, query.isFetching, selected, select]);
 
   return query;
 }
@@ -44,8 +51,9 @@ export function useInstance(id: string | null) {
 export function useSelectedInstance(): Instance | null {
   const { data } = useInstances();
   const selected = useUiStore((state) => state.selectedInstanceId);
-  if (!data || !selected) return null;
-  return data.find((entry) => entry.id === selected) ?? data[0] ?? null;
+  if (!data || data.length === 0) return null;
+  if (!selected) return data[0] ?? null;
+  return data.find((entry) => entry.id === selected) ?? null;
 }
 
 export function useInstanceMods(id: string | null) {
@@ -84,8 +92,13 @@ export function useCreateInstance() {
   return useMutation({
     mutationFn: (request: CreateInstanceRequest) => instanceService.create(request),
     onSuccess: (instance) => {
-      invalidateInstance(client, instance.id);
+      client.setQueryData<Instance[]>(qk.instances, (current) => {
+        const list = current ?? [];
+        if (list.some((entry) => entry.id === instance.id)) return list;
+        return [instance, ...list];
+      });
       select(instance.id);
+      invalidateInstance(client, instance.id);
       toast.success(`Created “${instance.name}”`, "Install it from the Play page");
     },
     onError: (error) => toast.error(error, "Could not create the instance"),

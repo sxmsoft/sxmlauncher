@@ -84,7 +84,9 @@ impl MojangClient {
             .find(|entry| entry.id == version_id)
             .map(|entry| entry.url.clone())
             .ok_or_else(|| {
-                AppError::Config(format!("Minecraft {version_id} is not in the version manifest"))
+                AppError::Config(format!(
+                    "Minecraft {version_id} is not in the version manifest"
+                ))
             })
     }
 
@@ -174,19 +176,22 @@ pub fn build_install_plan(
         ..Default::default()
     };
 
-    // 1. Client jar.
+    // 1. Client jar. Inherited profiles keep this jar beside the vanilla id.
     if let Some(client) = version.downloads.as_ref().and_then(|d| d.client.as_ref()) {
-        let destination = paths
-            .version_dir(&version.id)
-            .join(format!("{}.jar", version.id));
-        plan.total_bytes += client.size.unwrap_or(0);
-        plan.files.push(InstallFile {
-            label: format!("{}.jar", version.id),
-            url: client.url.clone(),
-            destination,
-            sha1: client.sha1.clone(),
-            size: client.size,
-        });
+        if !client.url.is_empty() {
+            let client_id = crate::models::version::client_jar_version_id(version);
+            let destination = paths
+                .version_dir(client_id)
+                .join(format!("{client_id}.jar"));
+            plan.total_bytes += client.size.unwrap_or(0);
+            plan.files.push(InstallFile {
+                label: format!("{client_id}.jar"),
+                url: client.url.clone(),
+                destination,
+                sha1: client.sha1.clone(),
+                size: client.size,
+            });
+        }
     }
 
     // 2. Libraries + natives.
@@ -205,7 +210,8 @@ pub fn build_install_plan(
                     .downloads
                     .as_ref()
                     .and_then(|d| d.artifact.as_ref())
-                    .and_then(|artifact| artifact.sha1.clone());
+                    .and_then(|artifact| artifact.sha1.clone())
+                    .or_else(|| library.sha1.clone());
                 plan.total_bytes += size.unwrap_or(0);
                 plan.files.push(InstallFile {
                     // Maven coordinates are `group:artifact:version`, so the
@@ -229,15 +235,12 @@ pub fn build_install_plan(
         if let Some(native) = library.native_artifact() {
             plan.natives.push(NativeEntry {
                 url: native.url.clone(),
-                destination: paths
-                    .natives()
-                    .join(&version.id)
-                    .join(
-                        native
-                            .relative_path()
-                            .and_then(|path| path.file_name().map(PathBuf::from))
-                            .unwrap_or_else(|| PathBuf::from("natives.jar")),
-                    ),
+                destination: paths.natives().join(&version.id).join(
+                    native
+                        .relative_path()
+                        .and_then(|path| path.file_name().map(PathBuf::from))
+                        .unwrap_or_else(|| PathBuf::from("natives.jar")),
+                ),
                 excludes: library.extract_excludes(),
             });
         }
@@ -284,6 +287,64 @@ pub struct Installer<'a> {
 }
 
 impl<'a> Installer<'a> {
+    pub fn http(&self) -> &reqwest::Client {
+        &self.http
+    }
+
+    /// Download libraries from a profile. Client jars and asset objects are
+    /// left to [`Self::install_version`], which is only called with a Mojang
+    /// version id.
+    pub async fn install_libraries(
+        &self,
+        version: &VersionJson,
+        label: &str,
+        sink: Arc<dyn ProgressSink>,
+    ) -> AppResult<()> {
+        let features = FeatureSet::default();
+        let plan = build_install_plan(version, self.paths, &features)?;
+        let libraries_root = self.paths.libraries();
+        let mut seen = std::collections::HashSet::new();
+        let files: Vec<InstallFile> = plan
+            .files
+            .into_iter()
+            .filter(|file| file.destination.starts_with(&libraries_root))
+            .filter(|file| seen.insert(file.destination.clone()))
+            .collect();
+        self.download_files(label, files, sink).await
+    }
+
+    pub async fn download_files(
+        &self,
+        label: &str,
+        files: Vec<InstallFile>,
+        sink: Arc<dyn ProgressSink>,
+    ) -> AppResult<()> {
+        if files.is_empty() {
+            return Ok(());
+        }
+        let tasks: Vec<DownloadTask> = files
+            .iter()
+            .map(|file| {
+                let mut task = DownloadTask::new(
+                    file.label.clone(),
+                    file.url.clone(),
+                    file.destination.clone(),
+                );
+                if let Some(sha1) = &file.sha1 {
+                    task = task.with_sha1(sha1.clone());
+                }
+                if let Some(size) = file.size {
+                    task = task.with_size(size);
+                }
+                task
+            })
+            .collect();
+        self.downloader
+            .fetch_all(JobKind::InstanceInstall, label, tasks, sink)
+            .await?;
+        Ok(())
+    }
+
     pub fn new(
         paths: &'a AppPaths,
         cache: Option<Database>,
@@ -371,7 +432,9 @@ impl<'a> Installer<'a> {
         }
         let tasks: Vec<DownloadTask> = natives
             .iter()
-            .map(|native| DownloadTask::new("natives", native.url.clone(), native.destination.clone()))
+            .map(|native| {
+                DownloadTask::new("natives", native.url.clone(), native.destination.clone())
+            })
             .collect();
         self.downloader
             .fetch_all(JobKind::InstanceInstall, "Natives", tasks, sink.clone())
@@ -412,7 +475,10 @@ impl<'a> Installer<'a> {
         )
         .await;
 
-        let index_path = self.paths.assets_indexes().join(format!("{}.json", index_ref.id));
+        let index_path = self
+            .paths
+            .assets_indexes()
+            .join(format!("{}.json", index_ref.id));
         if !index_path.is_file() {
             download_artifact(&self.paths.downloads, &self.http, index_ref, &index_path).await?;
         }
@@ -494,8 +560,7 @@ pub fn extract_natives(archive: &Path, output: &Path, excludes: &[String]) -> Ap
         let name = entry.name().to_string();
 
         // Library natives are jar-relative; `META-INF/` is always excluded.
-        if excludes.iter().any(|pattern| name.starts_with(pattern))
-            || name.starts_with("META-INF/")
+        if excludes.iter().any(|pattern| name.starts_with(pattern)) || name.starts_with("META-INF/")
         {
             continue;
         }
@@ -696,8 +761,8 @@ mod tests {
         }
 
         let output = temp.join("out");
-        let extracted = extract_natives(&archive, &output, &["META-INF/".to_string()])
-            .expect("extract");
+        let extracted =
+            extract_natives(&archive, &output, &["META-INF/".to_string()]).expect("extract");
         assert_eq!(extracted, 1);
         assert!(output.join("lwjgl.dll").is_file());
         assert!(!output.join("readme.txt").exists());
