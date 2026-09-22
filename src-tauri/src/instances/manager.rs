@@ -403,6 +403,19 @@ impl InstanceManager {
             0
         };
 
+        // Shared libraries and the client jar live outside the instance folder.
+        // What the card calls "size" is this folder: mods, configs, saves, logs.
+        let size_root = layout.root();
+        instance.size_bytes = tokio::task::spawn_blocking(move || {
+            if size_root.exists() {
+                directory_size(&size_root)
+            } else {
+                0
+            }
+        })
+        .await
+        .unwrap_or(0);
+
         self.db.upsert_instance(&instance)?;
         Ok(instance)
     }
@@ -785,8 +798,17 @@ mod tests {
             .await
             .expect("create");
 
+        let marker = manager.layout(instance.config.id).mods();
+        std::fs::create_dir_all(&marker).expect("mods dir");
+        std::fs::write(marker.join("pack.jar"), vec![0u8; 128]).expect("mod jar");
+
         let refreshed = manager.refresh(instance.config.id).await.expect("refresh");
         assert_eq!(refreshed.status, InstanceStatus::NotInstalled);
+        assert!(
+            refreshed.size_bytes >= 128,
+            "refresh should record the instance folder size, got {}",
+            refreshed.size_bytes
+        );
     }
 
     #[tokio::test]

@@ -4,7 +4,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { qk } from "@/lib/query-client";
 import { modService } from "@/services";
-import { toast } from "@/stores/ui";
+import { toast, useUiStore } from "@/stores/ui";
+import type { Instance } from "@/types/instance";
 import type { ModRequestRequest, ModSearchQuery, ModSource } from "@/types/modpack";
 
 export function useModSearch(query: ModSearchQuery, enabled = true) {
@@ -94,6 +95,7 @@ export function useDownloadMod() {
 /** Create an instance from a `.mrpack` / CurseForge pack (creates its own instance). */
 export function useInstallModpack() {
   const client = useQueryClient();
+  const select = useUiStore((state) => state.selectInstance);
   return useMutation({
     mutationFn: ({
       projectId,
@@ -107,8 +109,22 @@ export function useInstallModpack() {
       source?: import("@/types/modpack").ModSource;
     }) => modService.installModpack(projectId, versionId, name, source ?? "modrinth"),
     onSuccess: (instance) => {
+      // Seed the new row before selecting it, so a stale list cannot snap the
+      // Play card back to whichever instance was open before the pack install.
+      client.setQueryData<Instance[]>(qk.instances, (current) => {
+        const list = current ?? [];
+        if (list.some((entry) => entry.id === instance.id)) {
+          return list.map((entry) => (entry.id === instance.id ? instance : entry));
+        }
+        return [instance, ...list];
+      });
+      select(instance.id);
       void client.invalidateQueries({ queryKey: qk.instances });
-      toast.success(`Modpack installed as “${instance.name}”`, "Ready to launch");
+      const ready = instance.status === "ready" || instance.status === "running";
+      toast.success(
+        `Modpack installed as “${instance.name}”`,
+        ready ? "Ready to launch" : "Open Play and install the game files to launch",
+      );
     },
     onError: (error) => toast.error(error, "Modpack install failed"),
   });

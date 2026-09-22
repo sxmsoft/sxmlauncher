@@ -62,6 +62,7 @@ export function LaunchPanel({
         (entry) =>
           entry.instanceId === instance.id &&
           (entry.kind === "instance_install" ||
+            entry.kind === "modpack_install" ||
             entry.kind === "launch" ||
             entry.kind === "asset_hydration" ||
             entry.kind === "java_runtime"),

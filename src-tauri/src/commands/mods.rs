@@ -7,13 +7,14 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::models::instance::{Instance, InstanceStatus, LoaderKind, ModLoader};
+use crate::models::instance::{Instance, LoaderKind, ModLoader};
 use crate::models::modpack::{
     ModProject, ModSearchQuery, ModSearchResults, ModSource, ModVersion, PackTarget,
     ResolvedPackPlan,
 };
+use crate::models::progress::InstanceBoundSink;
 use crate::mods::resolver::ModRequest;
-use crate::mods::{JavaRuntime, JavaRegistry, ModEngine};
+use crate::mods::{JavaRegistry, JavaRuntime, ModEngine};
 use crate::state::{sink_for, AppState};
 
 /// Search mods or modpacks.
@@ -179,7 +180,12 @@ pub async fn mod_install(
 
     let root = state.instances().layout(instance_id).root();
     engine
-        .install_plan(&plan, &root, format!("Installing {} mods", plan.files.len()), sink_for(&app))
+        .install_plan(
+            &plan,
+            &root,
+            format!("Installing {} mods", plan.files.len()),
+            sink_for(&app),
+        )
         .await?;
     engine.record_installed(instance_id, &plan)?;
     state.instances().refresh(instance_id).await?;
@@ -225,7 +231,10 @@ pub async fn mod_download(
     };
 
     // Resolve the single request into a full plan (dependencies included).
-    let plan = match engine.resolve(std::slice::from_ref(&request), &target).await {
+    let plan = match engine
+        .resolve(std::slice::from_ref(&request), &target)
+        .await
+    {
         Ok(plan) => plan,
         // Last-resort fallback: pull exactly the requested version file
         // without dependency resolution, so a hiccup in the dependency graph
@@ -281,7 +290,10 @@ pub async fn mod_download(
     for file in &mut plan.files {
         if file.destination.is_empty() || file.destination.starts_with("overrides") {
             file.destination = if file.file_name.ends_with(".jar") {
-                PathBuf::from("mods").join(&file.file_name).to_string_lossy().into_owned()
+                PathBuf::from("mods")
+                    .join(&file.file_name)
+                    .to_string_lossy()
+                    .into_owned()
             } else {
                 file.file_name.clone()
             };
@@ -289,7 +301,12 @@ pub async fn mod_download(
     }
 
     engine
-        .install_plan(&plan, &root, format!("Downloading {}", request.project_id), sink_for(&app))
+        .install_plan(
+            &plan,
+            &root,
+            format!("Downloading {}", request.project_id),
+            sink_for(&app),
+        )
         .await?;
     engine.record_installed(instance_id, &plan)?;
     state.instances().refresh(instance_id).await?;
@@ -305,17 +322,17 @@ async fn fetch_single_version(
     match request.source {
         ModSource::Modrinth => {
             let version_id = request.version_id.clone().ok_or_else(|| {
-                AppError::ModResolution(
-                    "pick a version for this mod and retry".into(),
-                )
+                AppError::ModResolution("pick a version for this mod and retry".into())
             })?;
             engine.modrinth().version(&version_id).await
         }
         ModSource::CurseForge => {
-            let mod_id: u32 = request
-                .project_id
-                .parse()
-                .map_err(|_| AppError::Config(format!("`{}` is not a CurseForge mod id", request.project_id)))?;
+            let mod_id: u32 = request.project_id.parse().map_err(|_| {
+                AppError::Config(format!(
+                    "`{}` is not a CurseForge mod id",
+                    request.project_id
+                ))
+            })?;
             let wanted: u32 = request
                 .version_id
                 .as_deref()
@@ -324,10 +341,9 @@ async fn fetch_single_version(
                     AppError::ModResolution("pick a version for this mod and retry".into())
                 })?;
             let files = engine.curseforge().files(mod_id, None).await?;
-            let file = files
-                .iter()
-                .find(|file| file.id == wanted)
-                .ok_or_else(|| AppError::ModResolution(format!("version {wanted} of this mod was not found")))?;
+            let file = files.iter().find(|file| file.id == wanted).ok_or_else(|| {
+                AppError::ModResolution(format!("version {wanted} of this mod was not found"))
+            })?;
             Ok(engine.curseforge().file_to_version(file))
         }
     }
@@ -368,13 +384,9 @@ async fn install_modrinth_modpack(
         Some(version_id) => engine.modrinth().version(version_id).await?,
         None => {
             let project = engine.modrinth().project(&project_id).await?;
-            let game_version = project
-                .game_versions
-                .last()
-                .cloned()
-                .ok_or_else(|| {
-                    AppError::ModResolution("this pack lists no supported game version".into())
-                })?;
+            let game_version = project.game_versions.last().cloned().ok_or_else(|| {
+                AppError::ModResolution("this pack lists no supported game version".into())
+            })?;
             engine
                 .modrinth()
                 .latest_compatible(&project_id, &game_version, None)
@@ -410,13 +422,16 @@ async fn install_modrinth_modpack(
         )
         .await?;
 
-    let root = state.instances().layout(instance.config.id).root();
+    let instance_id = instance.config.id;
+    let sink: std::sync::Arc<dyn crate::models::progress::ProgressSink> =
+        std::sync::Arc::new(InstanceBoundSink::new(sink_for(&app), instance_id));
+    let root = state.instances().layout(instance_id).root();
 
     // 3. Download the .mrpack and install it.
-    let archive = state.paths.downloads.join(format!(
-        "{}-{}.mrpack",
-        version.project_id, version.id
-    ));
+    let archive = state
+        .paths
+        .downloads
+        .join(format!("{}-{}.mrpack", version.project_id, version.id));
     let downloader = engine.downloader();
     let mut task = crate::mods::DownloadTask::new(
         version.file_name.clone(),
@@ -430,13 +445,15 @@ async fn install_modrinth_modpack(
         crate::models::progress::JobKind::ModpackInstall,
         format!("Downloading {}", version.name),
         crate::models::progress::JobStage::Downloading,
-        sink_for(&app),
+        sink.clone(),
     ));
-    downloader.fetch(task, tracker).await?;
+    if let Err(err) = downloader.fetch(task, tracker.clone()).await {
+        tracker.fail(err.to_string()).await;
+        return Err(err);
+    }
+    tracker.finish().await;
 
-    let plan = engine
-        .install_mrpack(archive, root, sink_for(&app))
-        .await?;
+    let plan = engine.install_mrpack(archive, root, sink).await?;
 
     // 4. Record the pack as the instance's source.
     let mut instance = state.instances().get(instance.config.id).await?;
@@ -461,11 +478,9 @@ async fn install_modrinth_modpack(
         .await?;
 
     engine.record_installed(instance.config.id, &plan)?;
-    let refreshed = state.instances().refresh(instance.config.id).await?;
-    Ok(Instance {
-        status: InstanceStatus::Ready,
-        ..refreshed
-    })
+    // Status follows the files on disk. The pack's mods are in place, but the
+    // Minecraft client is a separate install, so this is NotInstalled until Play.
+    state.instances().refresh(instance.config.id).await
 }
 
 async fn install_curseforge_modpack(
@@ -533,11 +548,14 @@ async fn install_curseforge_modpack(
         )
         .await?;
 
-    let root = state.instances().layout(instance.config.id).root();
-    let archive = state.paths.downloads.join(format!(
-        "cf-{}-{}.zip",
-        version.project_id, version.id
-    ));
+    let instance_id = instance.config.id;
+    let sink: std::sync::Arc<dyn crate::models::progress::ProgressSink> =
+        std::sync::Arc::new(InstanceBoundSink::new(sink_for(&app), instance_id));
+    let root = state.instances().layout(instance_id).root();
+    let archive = state
+        .paths
+        .downloads
+        .join(format!("cf-{}-{}.zip", version.project_id, version.id));
     let mut task = crate::mods::DownloadTask::new(
         version.file_name.clone(),
         version.download_url.clone(),
@@ -550,9 +568,13 @@ async fn install_curseforge_modpack(
         crate::models::progress::JobKind::ModpackInstall,
         format!("Downloading {}", version.name),
         crate::models::progress::JobStage::Downloading,
-        sink_for(&app),
+        sink.clone(),
     ));
-    engine.downloader().fetch(task, tracker).await?;
+    if let Err(err) = engine.downloader().fetch(task, tracker.clone()).await {
+        tracker.fail(err.to_string()).await;
+        return Err(err);
+    }
+    tracker.finish().await;
 
     // CurseForge packs are zip archives with manifest.json + overrides/.
     // Reuse the mrpack installer when the archive happens to be an mrpack;
@@ -563,11 +585,11 @@ async fn install_curseforge_modpack(
         .is_some_and(|ext| ext.eq_ignore_ascii_case("mrpack"))
     {
         engine
-            .install_mrpack(archive, root.clone(), sink_for(&app))
+            .install_mrpack(archive, root.clone(), sink.clone())
             .await?
     } else {
         engine
-            .install_curseforge_pack(archive, root.clone(), sink_for(&app))
+            .install_curseforge_pack(archive, root.clone(), sink)
             .await?
     };
 
@@ -591,10 +613,7 @@ async fn install_curseforge_modpack(
         version_number: version.version_number,
         icon_url: None,
     });
-    Ok(Instance {
-        status: InstanceStatus::Ready,
-        ..refreshed
-    })
+    Ok(refreshed)
 }
 
 /// Detected Java runtimes.
@@ -727,7 +746,10 @@ pub async fn java_install(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> AppResult<JavaRuntime> {
-    state.mods().java().install(major, sink_for(&app).as_ref())
+    state
+        .mods()
+        .java()
+        .install(major, sink_for(&app).as_ref())
         .await
 }
 
@@ -744,7 +766,10 @@ pub async fn java_install_for_version(
         .and_then(LoaderKind::from_str_opt)
         .unwrap_or(LoaderKind::Vanilla);
     let required = crate::mods::required_major_for(&game_version, loader_kind);
-    state.mods().java().install(required, sink_for(&app).as_ref())
+    state
+        .mods()
+        .java()
+        .install(required, sink_for(&app).as_ref())
         .await
 }
 

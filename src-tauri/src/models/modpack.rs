@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum ModSource {
     Modrinth,
+    /// Wire name is `curseforge` (the UI and the database). `curse_forge` is
+    /// accepted so configs written by the old snake_case rename still load.
+    #[serde(rename = "curseforge", alias = "curse_forge")]
     CurseForge,
 }
 
@@ -32,7 +35,7 @@ impl ModSource {
     pub fn from_str_opt(raw: &str) -> Option<Self> {
         match raw.to_ascii_lowercase().as_str() {
             "modrinth" => Some(ModSource::Modrinth),
-            "curseforge" => Some(ModSource::CurseForge),
+            "curseforge" | "curse_forge" | "curse-forge" => Some(ModSource::CurseForge),
             _ => None,
         }
     }
@@ -427,4 +430,34 @@ pub struct CurseForgeRef {
     pub mod_id: u32,
     pub file_id: u32,
     pub name: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn curseforge_serializes_as_curseforge_and_accepts_the_old_name() {
+        assert_eq!(
+            serde_json::to_string(&ModSource::CurseForge).unwrap(),
+            "\"curseforge\""
+        );
+        assert_eq!(
+            serde_json::from_str::<ModSource>("\"curseforge\"").unwrap(),
+            ModSource::CurseForge
+        );
+        assert_eq!(
+            serde_json::from_str::<ModSource>("\"curse_forge\"").unwrap(),
+            ModSource::CurseForge
+        );
+        assert_eq!(
+            ModSource::from_str_opt("curse_forge"),
+            Some(ModSource::CurseForge)
+        );
+        assert_eq!(
+            ModSource::from_str_opt("curse-forge"),
+            Some(ModSource::CurseForge)
+        );
+        assert_eq!(ModSource::CurseForge.as_str(), "curseforge");
+    }
 }
