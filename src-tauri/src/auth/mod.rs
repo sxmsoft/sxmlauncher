@@ -332,17 +332,24 @@ impl AccountManager {
 
     /// Begin the Ely.by OAuth sign-in.
     ///
-    /// The loopback listener binds the port encoded in the configured redirect
-    /// URI, because Ely.by compares `redirect_uri` exactly — a random port would
-    /// produce their "can not find application you are trying to authorize"
-    /// page even with a correct client id.
+    /// The loopback listener binds the port *and path* encoded in the configured
+    /// redirect URI, because Ely.by compares `redirect_uri` exactly — a random
+    /// port (or the wrong `/callback` path) would produce their "can not find
+    /// application you are trying to authorize" page even with a correct client id.
     pub async fn begin_elyby_login(&self) -> AppResult<PendingLogin> {
         let state = oauth::random_state();
         let port = self.elyby_redirect_port();
-        let server = LoopbackServer::bind_on(port).await?;
+        let callback_path = url::Url::parse(&self.elyby_redirect_uri)
+            .ok()
+            .map(|url| url.path().to_string())
+            .unwrap_or_else(|| "/elyby/callback".to_string());
+        let server = LoopbackServer::bind_on_with_path(port, &callback_path).await?;
         let redirect_uri = if port == 0 {
             server.redirect_uri().to_string()
         } else {
+            // Prefer the exact registered URI (host + port + path) over the
+            // derived one so a trailing-slash mismatch cannot reject the token
+            // exchange.
             self.elyby_redirect_uri.clone()
         };
         let authorize_url = self.elyby.authorize_url(&redirect_uri, &state)?;

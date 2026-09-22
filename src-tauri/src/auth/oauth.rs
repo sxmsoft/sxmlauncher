@@ -80,6 +80,8 @@ pub struct CallbackResult {
 pub struct LoopbackServer {
     listener: TcpListener,
     redirect_uri: String,
+    /// Path component that the browser must hit (e.g. `/callback` or `/elyby/callback`).
+    callback_path: String,
 }
 
 impl LoopbackServer {
@@ -94,6 +96,16 @@ impl LoopbackServer {
     /// exactly, so a random ephemeral port can never match. The port is part of
     /// the Settings → Fixes value the user registered with them.
     pub async fn bind_on(port: u16) -> AppResult<Self> {
+        Self::bind_on_with_path(port, "/callback").await
+    }
+
+    /// Bind a fixed port and accept callbacks on a specific path.
+    ///
+    /// Ely.by's registered redirect is `http://localhost:25564/elyby/callback`,
+    /// not `/callback`. Listening only for `/callback` made every Ely.by browser
+    /// sign-in hang until the timeout — the provider redirected correctly, we
+    /// answered 404 and ignored it.
+    pub async fn bind_on_with_path(port: u16, callback_path: &str) -> AppResult<Self> {
         let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port)))
             .await
             .map_err(|err| {
@@ -106,9 +118,11 @@ impl LoopbackServer {
             .local_addr()
             .map_err(|err| AppError::Account(format!("cannot read loopback port: {err}")))?
             .port();
+        let path = normalize_callback_path(callback_path);
         Ok(Self {
             listener,
-            redirect_uri: format!("http://localhost:{bound}/callback"),
+            redirect_uri: format!("http://localhost:{bound}{path}"),
+            callback_path: path,
         })
     }
 
@@ -121,7 +135,7 @@ impl LoopbackServer {
         self.listener.local_addr().ok().map(|addr| addr.port())
     }
 
-    /// Wait for the browser to hit `/callback?code=...&state=...`.
+    /// Wait for the browser to hit the configured callback path.
     ///
     /// Runs until the timeout expires; browser noise (favicon requests, empty
     /// preflight connections) is answered and ignored.
@@ -136,6 +150,7 @@ impl LoopbackServer {
         timeout: Duration,
     ) -> AppResult<CallbackResult> {
         let deadline = tokio::time::Instant::now() + timeout;
+        let callback_path = self.callback_path.clone();
 
         loop {
             let accept = tokio::time::timeout_at(deadline, self.listener.accept()).await;
@@ -167,8 +182,13 @@ impl LoopbackServer {
                 continue;
             };
 
-            // Ignore anything that is not the callback path (favicon, probes).
-            if !target.starts_with("/callback") {
+            // Accept the registered path (and `/callback` as a fallback so a
+            // mistyped Settings → Fixes value still works during migration).
+            let path_only = target.split('?').next().unwrap_or(target);
+            let matches = path_only == callback_path
+                || path_only == "/callback"
+                || path_only.ends_with("/callback");
+            if !matches {
                 let _ = respond(&mut socket, 404, "Not found", "Waiting for sign-in…").await;
                 continue;
             }
@@ -246,6 +266,22 @@ impl LoopbackServer {
             return Ok(CallbackResult { code, state });
         }
     }
+}
+
+/// Ensure the callback path always starts with `/` and has no trailing slash.
+fn normalize_callback_path(path: &str) -> String {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return "/callback".to_string();
+    }
+    let with_slash = if trimmed.starts_with('/') {
+        trimmed.to_string()
+    } else {
+        format!("/{trimmed}")
+    };
+    with_slash
+        .trim_end_matches('/')
+        .to_string()
 }
 
 /// Minimal HTTP/1.1 response with a dark-styled landing page.
@@ -362,5 +398,40 @@ mod tests {
             .await
             .expect_err("must time out");
         assert!(error.to_string().contains("timed out"));
+    }
+
+    #[tokio::test]
+    async fn loopback_server_accepts_elyby_callback_path() {
+        let server = LoopbackServer::bind_on_with_path(0, "/elyby/callback")
+            .await
+            .expect("bind");
+        let redirect = server.redirect_uri().to_string();
+        let port = server.port().expect("port");
+        assert!(redirect.ends_with("/elyby/callback"));
+
+        let handle = tokio::spawn(async move { server.wait_for_code("expected-state").await });
+
+        let mut client = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .expect("connect");
+        client
+            .write_all(
+                b"GET /elyby/callback?code=ely-code&state=expected-state HTTP/1.1\r\nHost: localhost\r\n\r\n",
+            )
+            .await
+            .expect("write");
+        let mut response = String::new();
+        client.read_to_string(&mut response).await.expect("read");
+        assert!(response.contains("200 OK"));
+
+        let result = handle.await.expect("join").expect("callback");
+        assert_eq!(result.code, "ely-code");
+    }
+
+    #[test]
+    fn normalize_callback_path_is_stable() {
+        assert_eq!(normalize_callback_path("/elyby/callback"), "/elyby/callback");
+        assert_eq!(normalize_callback_path("elyby/callback/"), "/elyby/callback");
+        assert_eq!(normalize_callback_path(""), "/callback");
     }
 }
