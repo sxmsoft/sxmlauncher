@@ -1,15 +1,17 @@
 ﻿name: Windows build
 
+# Paused until Linux desktop QA passes. Do not upload Windows installers
+# from branch pushes. Re-enable the push trigger after that QA.
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - cursor/sxmlauncher-rewrite-a8a2
-      - rewrite/v2
-      - main
+    inputs:
+      linux_qa:
+        description: "Type LINUX-QA-PASSED to allow a Windows build"
+        required: true
 
 jobs:
   build-windows:
+    if: github.event.inputs.linux_qa == 'LINUX-QA-PASSED'
     runs-on: windows-latest
     steps:
       - name: Checkout
