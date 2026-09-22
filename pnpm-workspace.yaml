@@ -1,0 +1,13 @@
+packages:
+  - '.'
+
+# pnpm 11 refuses to run dependency lifecycle scripts unless they are
+# explicitly allowed or denied, and fails `install` with
+# ERR_PNPM_IGNORED_BUILDS when a script has neither decision.
+#
+# esbuild arrives as an optional peer dependency of Vite and downloads its
+# platform binary from its postinstall step. The production build does not
+# depend on it (Vite 8 minifies with Rolldown's built-in Oxc minifier), but the
+# decision still has to be made explicit or every install is an error.
+allowBuilds:
+  esbuild: true

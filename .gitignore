@@ -1,0 +1,29 @@
+# dependencies
+node_modules/
+
+# frontend build output
+/dist
+/dist-ssr
+*.local
+
+# rust / tauri build output
+/src-tauri/target
+/src-tauri/gen
+
+# local app data that must never be committed
+*.db
+*.db-journal
+*.sqlite
+.env
+.env.local
+
+# updater signing keys (NEVER commit the private key)
+.keys/
+
+# editor / os noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.log
