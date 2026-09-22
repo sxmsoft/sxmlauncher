@@ -22,8 +22,7 @@ jobs:
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 9
+        # version comes from package.json packageManager field
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -39,11 +38,7 @@ jobs:
       - name: Disable updater artifacts for CI unsigned build
         shell: pwsh
         run: |
-          $p = "src-tauri/tauri.conf.json"
-          $j = Get-Content $p -Raw | ConvertFrom-Json
-          if ($j.bundle -ne $null) { $j.bundle | Add-Member -NotePropertyName createUpdaterArtifacts -NotePropertyValue $false -Force }
-          if ($j.plugins -and $j.plugins.updater) { $j.plugins.updater.active = $false }
-          ($j | ConvertTo-Json -Depth 30) | Set-Content $p -Encoding utf8
+          node -e "const fs=require('fs'); const p='src-tauri/tauri.conf.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); if(j.bundle) j.bundle.createUpdaterArtifacts=false; if(j.plugins&&j.plugins.updater) j.plugins.updater.active=false; fs.writeFileSync(p, JSON.stringify(j,null,2));"
 
       - name: Build Tauri app
         run: pnpm build:app
@@ -52,8 +47,9 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist-artifacts | Out-Null
-          Copy-Item src-tauri/target/release/sxmlauncher.exe dist-artifacts/SXMLauncher.exe -ErrorAction SilentlyContinue
-          Copy-Item src-tauri/target/release/SXMLauncher.exe dist-artifacts/SXMLauncher.exe -ErrorAction SilentlyContinue
+          Get-ChildItem src-tauri/target/release -Filter *.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^(sxmlauncher|SXMLauncher)\.exe$' } |
+            ForEach-Object { Copy-Item $_.FullName dist-artifacts/SXMLauncher.exe -Force }
           Get-ChildItem src-tauri/target/release/bundle -Recurse -Include *.msi,*setup.exe -ErrorAction SilentlyContinue |
             ForEach-Object { Copy-Item $_.FullName dist-artifacts/ -Force }
           Get-ChildItem dist-artifacts | Format-Table Name, Length
