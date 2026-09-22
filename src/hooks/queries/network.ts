@@ -128,11 +128,20 @@ export function useJoinCode() {
   const client = useQueryClient();
   const setGuest = useSessionsStore((state) => state.setGuest);
   return useMutation({
-    mutationFn: (code: string) => networkService.joinCode(code),
+    mutationFn: async (code: string) => {
+      const status = await networkService.joinCode(code);
+      // Bridge alone is not enough — launch (or redirect) the game into it.
+      await launchIntoBridge(status.localAddress, status.localPort);
+      return status;
+    },
     onSuccess: (status) => {
       setGuest(status);
       void client.invalidateQueries({ queryKey: qk.networkStatus });
-      toast.success(`Connected to ${status.serverName}`, `Bridge on ${status.localAddress}:${status.localPort}`);
+      void client.invalidateQueries({ queryKey: qk.running });
+      toast.success(
+        `Connected to ${status.serverName}`,
+        `Launching into ${status.localAddress}:${status.localPort}`,
+      );
     },
     onError: (error) => toast.error(error, "Could not join with that code"),
   });
@@ -142,13 +151,49 @@ export function useJoinServer() {
   const client = useQueryClient();
   const setGuest = useSessionsStore((state) => state.setGuest);
   return useMutation({
-    mutationFn: (id: string) => networkService.joinServer(id),
+    mutationFn: async (id: string) => {
+      const status = await networkService.joinServer(id);
+      await launchIntoBridge(status.localAddress, status.localPort);
+      return status;
+    },
     onSuccess: (status) => {
       setGuest(status);
       void client.invalidateQueries({ queryKey: qk.networkStatus });
-      toast.success(`Connected to ${status.serverName}`, `Bridge on ${status.localAddress}:${status.localPort}`);
+      void client.invalidateQueries({ queryKey: qk.running });
+      toast.success(
+        `Connected to ${status.serverName}`,
+        `Launching into ${status.localAddress}:${status.localPort}`,
+      );
     },
     onError: (error) => toast.error(error, "Could not join that world"),
+  });
+}
+
+/**
+ * Pick an instance and launch it with `--server/--port` pointed at the local
+ * P2P bridge. Without this step the bridge sits idle and "Join" appears to do
+ * nothing from the player's point of view.
+ */
+async function launchIntoBridge(localAddress: string, localPort: number) {
+  const { instanceService } = await import("@/services");
+  const { useUiStore } = await import("@/stores/ui");
+
+  const instances = await instanceService.list();
+  const selectedId = useUiStore.getState().selectedInstanceId;
+  const preferred =
+    instances.find((instance) => instance.id === selectedId) ??
+    instances.find((instance) => instance.status === "ready") ??
+    instances[0];
+
+  if (!preferred) {
+    throw new Error(
+      `Bridge is ready on ${localAddress}:${localPort}, but no instance exists to launch. \
+Create or install an instance that matches the host's game version, then join again.`,
+    );
+  }
+
+  await instanceService.launch(preferred.id, {
+    connect: `${localAddress}:${localPort}`,
   });
 }
 

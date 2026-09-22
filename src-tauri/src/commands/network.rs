@@ -337,6 +337,30 @@ pub async fn host_start(
     let manager = state.network()?;
     let settings = state.settings();
 
+    // Prefer an already-detected Open-to-LAN port for this instance over the
+    // hardcoded 25565 default. Singleplayer worlds almost never listen on 25565,
+    // so bridging there left guests connecting to nothing.
+    let mut local_port = request.local_port;
+    if local_port.is_none() {
+        if let Some(instance_id) = request.instance_id {
+            if let Some(lan) = state.lan().host_for_instance(instance_id) {
+                local_port = Some(lan.port);
+            }
+        }
+    }
+    let local_port = local_port.unwrap_or(bridge::DEFAULT_SERVER_PORT);
+    let local_server = std::net::SocketAddr::from(([127, 0, 0, 1], local_port));
+
+    // Refuse to publish a world that nothing is listening for: guests would
+    // punch successfully and then see "Connection refused".
+    if let Err(err) = tokio::net::TcpStream::connect(local_server).await {
+        return Err(AppError::Config(format!(
+            "nothing is listening on {local_server} ({err}). Launch the instance, open the \
+             world to LAN in Minecraft (or start a dedicated server), then try hosting again — \
+             the launcher detects the LAN port automatically."
+        )));
+    }
+
     // Derive game metadata from the attached instance when one is provided.
     let mut options = HostOptions {
         name: request.name.clone(),
@@ -356,10 +380,7 @@ pub async fn host_start(
         world_name: request.world_name.clone(),
         tags: request.tags.clone(),
         force_relay: request.force_relay,
-        local_server: std::net::SocketAddr::from((
-            [127, 0, 0, 1],
-            request.local_port.unwrap_or(bridge::DEFAULT_SERVER_PORT),
-        )),
+        local_server,
         ..HostOptions::default()
     };
 

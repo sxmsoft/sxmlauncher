@@ -247,8 +247,11 @@ impl AppState {
         // Reconnect the directory when the endpoint or STUN list changed.
         let previous = self.settings.read().clone();
         if previous.redis_url != sanitized.redis_url
+            || previous.mqtt_broker != sanitized.mqtt_broker
+            || previous.mqtt_port != sanitized.mqtt_port
             || previous.stun_servers != sanitized.stun_servers
             || previous.relay_url != sanitized.relay_url
+            || previous.directory_enabled != sanitized.directory_enabled
         {
             if sanitized.directory_enabled {
                 if let Err(err) = self.connect_directory(&sanitized).await {

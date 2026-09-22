@@ -319,16 +319,14 @@ impl SessionManager {
 
         // 1. Discover our public mapping.
         //
-        // The punch socket is bound on the same stack as the Minecraft server
-        // we are exposing: production hosts bind the wildcard (so the public
-        // endpoint is reachable), while a loopback-local server (tests, local
-        // demos) binds loopback so peers inside the same process can actually
-        // reach the endpoints the listing advertises.
-        let punch_bind = if options.local_server.ip().is_loopback() {
-            SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 0)
-        } else {
-            SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0)
-        };
+        // The punch socket MUST bind the wildcard (0.0.0.0), even when the
+        // Minecraft server we are bridging to is on 127.0.0.1. Binding punch to
+        // loopback just because the game is loopback-local made every real host
+        // unreachable from the internet — remote peers could never complete the
+        // hole punch. The bridge still dials the loopback Minecraft port; only
+        // the punch socket's bind address matters for reachability.
+        let punch_bind =
+            SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0);
         let punch_socket = if options.force_relay {
             None
         } else {

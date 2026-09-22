@@ -73,8 +73,8 @@ export function HostPanel({ instance }: { instance: Instance | null }) {
         <div className="flex flex-col gap-1">
           <CardTitle>Host World to Friends</CardTitle>
           <p className="text-muted-foreground text-sm">
-            Play together without port forwarding. Friends join from the server browser or
-            with a code.
+            Launch the instance, open the world to LAN in Minecraft, then flip this switch.
+            Friends join from the server browser or with a share code — no port forwarding.
           </p>
         </div>
         <Switch
