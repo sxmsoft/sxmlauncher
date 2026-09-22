@@ -4,7 +4,15 @@ import { Badge, StatusDot } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useInstallInstance, useLaunchInstance, useRunningInstances } from "@/hooks/queries";
-import { cn, formatBytes, formatRelative, loaderTone } from "@/lib/utils";
+import { cn, formatBytes, formatRelative } from "@/lib/utils";
+
+const LOADER_STRIPE: Record<string, string> = {
+  vanilla: "bg-[var(--primary)]",
+  fabric: "bg-teal-400",
+  quilt: "bg-sky-300",
+  forge: "bg-orange-400",
+  neoforge: "bg-lime-300",
+};
 import { useSessionsStore } from "@/stores/sessions";
 import { isPlayable, STATUS_LABEL, type Instance } from "@/types/instance";
 
@@ -31,53 +39,38 @@ export function InstanceCard({
   return (
     <Card
       className={cn(
-        "group flex cursor-pointer flex-col gap-3 p-4 transition-all duration-200 hover:border-white/20",
-        selected && "border-[color-mix(in_oklab,var(--primary)_50%,transparent)] ring-1 ring-[color-mix(in_oklab,var(--primary)_35%,transparent)]",
+        "group grid cursor-pointer grid-cols-[6px_minmax(0,1fr)_auto] items-stretch overflow-hidden",
+        selected && "border-[var(--primary)]",
       )}
       onClick={onSelect}
     >
-      <div className="flex items-start gap-3">
-        <div
-          className={cn(
-            "flex size-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-black/30 text-lg",
-          )}
-          aria-hidden
-        >
-          {instance.icon && instance.icon.length <= 4 ? instance.icon : "🎮"}
+      <div
+        className={cn("min-h-full", LOADER_STRIPE[instance.loader.kind] ?? "bg-[var(--primary)]")}
+        aria-hidden
+      />
+      <div className="flex min-w-0 flex-col gap-1 px-4 py-3">
+        <div className="flex items-center gap-2">
+          <span className="font-display truncate text-lg leading-none">{instance.name}</span>
+          {isRunning ? <StatusDot tone="success" pulse /> : null}
+          {hosting ? (
+            <Badge variant="success">
+              <Zap className="size-3" /> host
+            </Badge>
+          ) : null}
         </div>
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <div className="flex items-center gap-2">
-            <span className="truncate text-sm font-semibold">{instance.name}</span>
-            {isRunning ? <StatusDot tone="success" pulse /> : null}
-            {hosting ? (
-              <Badge variant="success">
-                <Zap className="size-3" /> hosting
-              </Badge>
-            ) : null}
-          </div>
-          <span className="text-muted-foreground truncate text-xs">
-            {instance.description || "No description"}
-          </span>
+        <div className="text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+          <span className="uppercase tracking-wider">{instance.loader.kind}</span>
+          <span>{instance.gameVersion}</span>
+          <span>{instance.modCount} mods</span>
+          <span>{formatBytes(instance.sizeBytes)}</span>
+          <span>{instance.lastPlayedAt ? formatRelative(instance.lastPlayedAt) : "never played"}</span>
+          {!playable ? <Badge variant="warning">{STATUS_LABEL[instance.status]}</Badge> : null}
         </div>
       </div>
-
-      <div className="flex flex-wrap items-center gap-1.5">
-        <Badge variant="outline">{instance.gameVersion}</Badge>
-        <Badge className={cn("border", loaderTone(instance.loader.kind))}>{instance.loader.kind}</Badge>
-        <Badge variant="outline">{instance.modCount} mods</Badge>
-        {!playable ? <Badge variant="warning">{STATUS_LABEL[instance.status]}</Badge> : null}
-      </div>
-
-      <div className="text-muted-foreground flex items-center justify-between text-[11px]">
-        <span>{formatBytes(instance.sizeBytes)}</span>
-        <span>{instance.lastPlayedAt ? formatRelative(instance.lastPlayedAt) : "never played"}</span>
-      </div>
-
-      <div className="flex items-center gap-2" onClick={(event) => event.stopPropagation()}>
+      <div className="flex items-center gap-2 pr-3" onClick={(event) => event.stopPropagation()}>
         {playable ? (
           <Button
             size="sm"
-            className="flex-1"
             onClick={() => launch.mutate({ id: instance.id })}
             loading={launch.isPending}
             disabled={isRunning}
@@ -89,7 +82,6 @@ export function InstanceCard({
           <Button
             size="sm"
             variant="secondary"
-            className="flex-1"
             onClick={() => install.mutate(instance.id)}
             loading={install.isPending}
           >
@@ -97,7 +89,7 @@ export function InstanceCard({
           </Button>
         )}
         <Button size="sm" variant="ghost" onClick={onOpen}>
-          Details
+          Open
         </Button>
       </div>
     </Card>

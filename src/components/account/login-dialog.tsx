@@ -84,10 +84,10 @@ export function LoginDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-xl">
         <DialogHeader>
-          <DialogTitle>Sign in</DialogTitle>
+          <DialogTitle>Account gate</DialogTitle>
           <DialogDescription>
-            Tokens are stored in your operating system's credential vault. SXMLauncher
-            never sees them again after sign-in.
+            Microsoft (browser or device code) and Ely.by (password or browser).
+            Skins show in the launcher after sign-in. Secrets stay in the OS vault.
           </DialogDescription>
         </DialogHeader>
 

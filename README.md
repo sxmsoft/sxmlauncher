@@ -73,11 +73,14 @@ cd src-tauri && cargo test
 # Production frontend bundle
 pnpm build
 
-# Native installer / binary (Windows `.msi` / `.exe` via Tauri)
+# Native installer. Windows NSIS/MSI publishing is paused in CI until
+# Linux desktop QA passes. Local `tauri build` still works on any OS.
 pnpm build:app
 ```
 
-Artifacts land under `src-tauri/target/release/bundle/`.
+Artifacts land under `src-tauri/target/release/bundle/`. GitHub tag
+releases do not publish Windows installers until the release workflow
+gate `LINUX-QA-PASSED` is set.
 
 ## Architecture (short)
 

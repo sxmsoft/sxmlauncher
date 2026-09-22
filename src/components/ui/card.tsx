@@ -2,12 +2,12 @@ import * as React from "react";
 
 import { cn } from "@/lib/utils";
 
-/** Frosted panel — the base surface for every page section. */
+/** Flat deck panel. Sharp corners, ink surface, copper hairline. */
 export function Card({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       className={cn(
-        "glass rounded-[var(--radius-xl)] text-[var(--card-foreground)] shadow-[0_20px_60px_-30px_rgba(0,0,0,0.9)]",
+        "rounded-[var(--radius)] border border-[var(--border)] bg-[var(--card)] text-[var(--card-foreground)]",
         className,
       )}
       {...props}

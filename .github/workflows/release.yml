@@ -14,13 +14,17 @@ name: Release
 # — once the first release is published, installed launchers pick up new
 # versions automatically from that URL.
 
+# Windows installers are paused until Linux desktop QA passes.
+# Tag pushes no longer publish NSIS/MSI artifacts. Re-enable the tag
+# trigger and the windows-latest job after that QA.
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
         description: "Existing tag to (re)build and release, e.g. v0.2.0"
+        required: true
+      linux_qa:
+        description: "Type LINUX-QA-PASSED to allow a Windows build"
         required: true
 
 permissions:
@@ -36,6 +40,7 @@ defaults:
 
 jobs:
   release:
+    if: github.event.inputs.linux_qa == 'LINUX-QA-PASSED'
     name: Build & publish (${{ matrix.runner }})
     strategy:
       fail-fast: false

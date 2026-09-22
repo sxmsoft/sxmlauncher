@@ -42,11 +42,11 @@ export function DashboardPage() {
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        title="Play"
+        title="Play deck"
         description={
           account.data
-            ? `Signed in as ${account.data.username}. Pick an instance, or host a world for friends.`
-            : "Add an account to play online, or create an offline profile for singleplayer."
+            ? `${account.data.username} is signed in. Singleplayer stays on the left; Host starts a server for this instance.`
+            : "Sign in for online play, or keep an offline profile for singleplayer."
         }
         actions={
           <>
@@ -72,8 +72,8 @@ export function DashboardPage() {
         />
       ) : null}
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,1fr)]">
-        <div className="flex flex-col gap-5">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.4fr)_minmax(280px,0.7fr)]">
+        <div className="flex flex-col gap-6">
           {instances.isLoading ? (
             <CardSkeleton className="h-64" />
           ) : selected ? (
@@ -104,12 +104,12 @@ export function DashboardPage() {
 
           <div>
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-semibold tracking-tight">Your instances</h2>
+              <h2 className="font-display text-2xl">Library</h2>
               {instances.data ? (
                 <Badge variant="outline">{instances.data.length}</Badge>
               ) : null}
             </div>
-            <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
+            <div className="flex flex-col gap-2">
               {(instances.data ?? []).map((instance) => (
                 <InstanceCard
                   key={instance.id}

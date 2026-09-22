@@ -36,17 +36,12 @@ export function TitleBar() {
   const connected = status?.directoryConnected ?? false;
 
   return (
-    <div className="drag-region flex h-11 shrink-0 items-center justify-between gap-3 border-b border-white/6 px-3">
-      <div className="flex items-center gap-2 pl-1">
-        <img
-          src="/icon.png"
-          alt="SXMLauncher"
-          className="size-6 rounded-md object-contain"
-          draggable={false}
-        />
-        <span className="text-sm font-semibold tracking-tight">SXMLauncher</span>
-        <span className="text-muted-foreground/60 hidden text-xs sm:inline">
-          p2p worlds · modpacks
+    <div className="drag-region flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--border)] bg-[oklch(0.13_0.012_65)] px-4">
+      <div className="flex items-baseline gap-3 pl-1">
+        <span className="font-display text-2xl leading-none text-[var(--primary)]">SXM</span>
+        <span className="font-display text-2xl leading-none">Deck</span>
+        <span className="hidden text-[11px] tracking-[0.18em] text-[var(--muted-foreground)] uppercase sm:inline">
+          instances · packs · host
         </span>
       </div>
 

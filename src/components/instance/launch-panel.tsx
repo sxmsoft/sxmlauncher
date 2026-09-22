@@ -157,9 +157,7 @@ export function LaunchPanel({
 
       <CardFooter className="flex flex-col items-stretch gap-4">
         <div className="flex flex-col gap-2">
-          <span className="text-muted-foreground text-[10px] font-medium tracking-widest uppercase">
-            Singleplayer
-          </span>
+          <span className="font-display text-xl text-[var(--primary)]">Singleplayer</span>
           <div className="flex flex-wrap items-center gap-2">
             {isRunning ? (
               <Button
@@ -218,9 +216,7 @@ export function LaunchPanel({
       </CardFooter>
 
       <CardContent className="flex flex-col gap-2 pt-0">
-        <span className="text-muted-foreground text-[10px] font-medium tracking-widest uppercase">
-          Multiplayer / Host
-        </span>
+        <span className="font-display text-xl text-[var(--primary)]">Multiplayer / Host</span>
         <p className="text-muted-foreground text-xs leading-relaxed">
           Host starts this instance&apos;s server from the launcher, waits until a port is
           listening, then shares a join code — friends do not need you to open LAN in-game first.

@@ -62,78 +62,60 @@ export function Sidebar() {
   };
 
   return (
-    <aside className="flex w-56 shrink-0 flex-col gap-3 border-r border-white/6 py-3">
-      <nav className="flex flex-col gap-1 px-2">
-        {NAV.map((item) => (
-          <NavLink key={item.to} to={item.to} end={item.to === "/"} className="group">
-            {({ isActive }) => (
-              <Hint label={item.hint} side="right">
-                <div
-                  className={cn(
-                    "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-150",
-                    isActive
-                      ? "bg-white/10 text-[var(--foreground)] shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
-                      : "text-[var(--muted-foreground)] hover:translate-x-0.5 hover:bg-white/6 hover:text-[var(--foreground)]",
-                  )}
-                >
-                  <item.icon
-                    className={cn("size-4", isActive && "text-[var(--primary)]")}
-                    aria-hidden
-                  />
-                  <span className="flex-1">{item.label}</span>
-                  {badgeFor(item.to) ? (
-                    <span className="text-muted-foreground text-[10px] tabular-nums">
-                      {badgeFor(item.to)}
-                    </span>
-                  ) : null}
-                </div>
-              </Hint>
-            )}
-          </NavLink>
-        ))}
-        <button
-          onClick={() => setActivityOpen(true)}
-          className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-[var(--muted-foreground)] transition-all duration-150 hover:translate-x-0.5 hover:bg-white/6 hover:text-[var(--foreground)]"
-        >
-          <Activity className="size-4" aria-hidden />
-          <span className="flex-1 text-left">Activity</span>
-          {activeJobCount > 0 ? (
-            <span className="text-[var(--primary)] text-[10px] tabular-nums">
-              {activeJobCount}
-            </span>
-          ) : null}
-        </button>
-      </nav>
-
-      <div className="mt-auto flex flex-col gap-2 px-3">
-        {(hostCount > 0 || guestCount > 0) && (
-          <div className="flex flex-col gap-1 rounded-lg border border-white/8 bg-black/20 p-2.5 text-xs">
-            <span className="text-muted-foreground flex items-center gap-1.5 font-medium">
-              <StatusDot tone="success" pulse />
-              live sessions
-            </span>
-            {hostCount > 0 ? <span>hosting {hostCount} world{hostCount === 1 ? "" : "s"}</span> : null}
-            {guestCount > 0 ? <span>joined {guestCount}</span> : null}
-          </div>
-        )}
-
-        {BROWSER_MODE ? (
-          <Badge variant="warning" className="justify-center">
-            browser preview · mock data
-          </Badge>
+    <nav className="no-drag flex shrink-0 items-center gap-1 overflow-x-auto border-b border-[var(--border)] bg-[oklch(0.14_0.012_70)] px-3">
+      {NAV.map((item) => (
+        <NavLink key={item.to} to={item.to} end={item.to === "/"}>
+          {({ isActive }) => (
+            <Hint label={item.hint} side="bottom">
+              <div
+                className={cn(
+                  "flex items-center gap-2 border-b-2 px-3 py-3 text-sm font-semibold",
+                  isActive
+                    ? "border-[var(--primary)] text-[var(--foreground)]"
+                    : "border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]",
+                )}
+              >
+                <item.icon className={cn("size-4", isActive && "text-[var(--primary)]")} aria-hidden />
+                <span>{item.label}</span>
+                {badgeFor(item.to) ? (
+                  <span className="text-[10px] tabular-nums text-[var(--primary)]">{badgeFor(item.to)}</span>
+                ) : null}
+              </div>
+            </Hint>
+          )}
+        </NavLink>
+      ))}
+      <button
+        type="button"
+        onClick={() => setActivityOpen(true)}
+        className="flex items-center gap-2 border-b-2 border-transparent px-3 py-3 text-sm font-semibold text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+      >
+        <Activity className="size-4" aria-hidden />
+        Activity
+        {activeJobCount > 0 ? (
+          <span className="text-[10px] tabular-nums text-[var(--primary)]">{activeJobCount}</span>
         ) : null}
+      </button>
 
+      <div className="ml-auto flex items-center gap-2 py-2 pl-3">
+        {hostCount > 0 || guestCount > 0 ? (
+          <span className="flex items-center gap-1.5 text-xs">
+            <StatusDot tone="success" pulse />
+            {hostCount > 0 ? `${hostCount} hosting` : null}
+            {guestCount > 0 ? `${guestCount} joined` : null}
+          </span>
+        ) : null}
+        {BROWSER_MODE ? <Badge variant="warning">preview</Badge> : null}
         {account.data ? (
           <AccountMenu />
         ) : (
           <AccountMenu>
-            <Button variant="outline" size="sm" className="w-full justify-start">
-              <UserPlus className="size-4" />
-              Add an account
+            <Button variant="outline" size="sm">
+              <UserPlus className="size-4" /> Sign in
             </Button>
           </AccountMenu>
         )}
       </div>
-    </aside>
+    </nav>
   );
 }

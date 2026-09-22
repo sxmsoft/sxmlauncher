@@ -17,7 +17,10 @@ export function PageHeader({
   return (
     <header className={cn("flex flex-wrap items-start justify-between gap-4", className)}>
       <div className="flex flex-col gap-1">
-        <h1 className="text-2xl leading-tight font-semibold tracking-tight">{title}</h1>
+        <p className="text-[10px] font-semibold tracking-[0.22em] text-[var(--primary)] uppercase">
+          SXM Deck
+        </p>
+        <h1 className="font-display text-4xl leading-none font-semibold">{title}</h1>
         {description ? (
           <p className="text-muted-foreground max-w-2xl text-sm">{description}</p>
         ) : null}
