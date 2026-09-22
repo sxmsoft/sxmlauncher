@@ -3569,12 +3569,16 @@ dependencies = [
  "num-bigint",
  "percent-encoding",
  "pin-project-lite",
+ "rustls 0.23.44",
+ "rustls-native-certs 0.8.4",
  "ryu",
  "sha1_smol",
  "socket2",
  "tokio",
+ "tokio-rustls 0.26.5",
  "tokio-util",
  "url",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -4575,6 +4579,7 @@ dependencies = [
  "rumqttc",
  "rusqlite",
  "rustls 0.22.4",
+ "rustls 0.23.44",
  "rustls-native-certs 0.7.3",
  "serde",
  "serde_json",

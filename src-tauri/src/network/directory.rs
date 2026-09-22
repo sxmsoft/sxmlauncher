@@ -52,7 +52,11 @@ pub struct RedisDirectory {
 
 impl RedisDirectory {
     /// Connect and verify the endpoint answers `PING`.
+    ///
+    /// `rediss://` (Upstash) needs the rustls crypto provider installed before
+    /// the client builds its TLS config. Installing twice is an error we ignore.
     pub async fn connect(url: &str) -> AppResult<Self> {
+        let _ = redis_rustls::crypto::ring::default_provider().install_default();
         let client = redis::Client::open(url)
             .map_err(|err| AppError::Directory(format!("invalid Redis url `{url}`: {err}")))?;
         let manager = tokio::time::timeout(
@@ -672,6 +676,37 @@ mod tests {
         let id = uuid::Uuid::nil();
         assert!(listing_key("sxml-dev", id).starts_with("sxml-dev:"));
         assert_ne!(listing_key("sxml-dev", id), listing_key("sxml", id));
+    }
+
+    #[test]
+    fn rediss_urls_parse_when_tls_is_compiled_in() {
+        // This is the exact failure mode without `tokio-rustls-comp`:
+        // `Client::open` rejects `rediss://` before any socket is opened.
+        let opened = redis::Client::open("rediss://default:token@example.upstash.io:6379");
+        assert!(
+            opened.is_ok(),
+            "rediss:// was rejected: {}",
+            opened
+                .as_ref()
+                .err()
+                .map(|err| err.to_string())
+                .unwrap_or_default()
+        );
+    }
+
+    #[tokio::test]
+    async fn rediss_connect_is_not_rejected_for_missing_tls() {
+        // Nothing listens here. A refused connection means the TLS feature
+        // compiled in and the client tried the socket.
+        let err = match RedisDirectory::connect("rediss://default:token@127.0.0.1:1").await {
+            Ok(_) => panic!("port 1 accepted a Redis connection"),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+        assert!(
+            !message.contains("feature is not enabled"),
+            "TLS client was not compiled in: {message}"
+        );
     }
 
     #[test]

@@ -56,7 +56,12 @@ regex = "1"
 parking_lot = "0.12"
 dashmap = "6"
 walkdir = "2"
-redis = { version = "0.32.7", features = ["tokio-comp", "connection-manager"] }
+# `tokio-rustls-comp` is what accepts `rediss://` (Upstash). `tls-rustls-webpki-roots`
+# verifies those public certificates without relying on the OS trust store.
+redis = { version = "0.32.7", features = ["tokio-rustls-comp", "connection-manager", "tls-rustls-webpki-roots"] }
+# redis 0.32 links rustls 0.23, which will not build a ClientConfig until a
+# process-wide crypto provider is installed. rumqttc still uses rustls 0.22.
+redis-rustls = { package = "rustls", version = "0.23", default-features = false, features = ["ring", "std"] }
 # Embedded MQTT directory: the client-side global server browser needs no
 # Redis server — a public broker's retained messages carry the listings.
 # rustls/rustls-native-certs versions match rumqttc's TLS stack (0.22 / 0.7)
