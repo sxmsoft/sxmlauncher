@@ -390,6 +390,8 @@ pub async fn host_start(
         world_name: request.world_name.clone(),
         tags: request.tags.clone(),
         force_relay: request.force_relay,
+        relay_url: settings.relay_url.clone(),
+        expose_lan_endpoints: settings.expose_lan_endpoints,
         local_server,
         game_version: instance.config.game_version.clone(),
         loader: instance.config.loader.clone(),

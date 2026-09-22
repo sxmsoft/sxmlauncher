@@ -29,8 +29,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::{AppError, AppResult};
 use crate::models::progress::{JobKind, JobStage, ProgressEvent, ProgressSink};
-use crate::models::server::{ConnectionDescriptor, ConnectionMode, PeerEndpoint};
-use crate::network::holepunch::PunchedChannel;
+use crate::models::server::{ConnectionDescriptor, ConnectionMode, EndpointKind, PeerEndpoint};
+use crate::network::holepunch::{PunchConfig, PunchedChannel};
 use crate::network::relay::RelayTransport;
 
 /// Maximum application payload per frame (keeps datagrams under the path MTU).
@@ -210,7 +210,8 @@ impl TransportRegistry {
     ///
     /// Order:
     /// 1. `Dedicated` / `DirectP2p` descriptors try direct first.
-    /// 2. On failure, fall back to the relay when the descriptor carries one.
+    /// 2. Relay-mode descriptors still try loopback and LAN candidates.
+    /// 3. On failure, fall back to the relay when the descriptor carries one.
     ///    This is exactly the "symmetric NAT" case the spec calls out.
     pub async fn connect(
         &self,
@@ -219,8 +220,10 @@ impl TransportRegistry {
     ) -> AppResult<ConnectedPeer> {
         let mut last_error: Option<AppError> = None;
 
-        if descriptor.mode != ConnectionMode::Relay {
-            match self.direct.connect(descriptor, sink.clone()).await {
+        // Relay mode still tries loopback / LAN first. A strict NAT blocks the
+        // public mapping, not a second launcher on this PC.
+        if let Some(direct) = direct_attempt(descriptor) {
+            match self.direct.connect(&direct, sink.clone()).await {
                 Ok(peer) => return Ok(peer),
                 Err(err) => {
                     sink.report(
@@ -311,10 +314,22 @@ impl Transport for DirectTransport {
             )
             .await;
 
-            match crate::network::holepunch::punch(
+            let punch_config = if endpoint.kind == EndpointKind::Local {
+                // Unreachable LAN addresses must not stall the relay fallback.
+                PunchConfig {
+                    timeout: Duration::from_millis(700),
+                    probe_interval: Duration::from_millis(50),
+                    stun_servers: Vec::new(),
+                    stun_timeout: Duration::from_millis(700),
+                }
+            } else {
+                PunchConfig::default()
+            };
+            match crate::network::holepunch::punch_with_config(
                 &socket,
                 address,
                 &descriptor.session_token,
+                &punch_config,
             )
             .await
             {
@@ -353,6 +368,26 @@ impl Transport for DirectTransport {
         .await?;
         let _ = punched;
         Ok(Some(started.elapsed().as_millis() as u32))
+    }
+}
+
+/// Direct attempt for this descriptor.
+///
+/// Punchable hosts try every candidate. Relay-mode hosts only try local
+/// candidates (loopback and LAN); the public mapping is not punchable.
+fn direct_attempt(descriptor: &ConnectionDescriptor) -> Option<ConnectionDescriptor> {
+    if descriptor.mode != ConnectionMode::Relay {
+        return Some(descriptor.clone());
+    }
+    let mut local_only = descriptor.clone();
+    local_only.mode = ConnectionMode::DirectP2p;
+    local_only
+        .endpoints
+        .retain(|endpoint| endpoint.kind == EndpointKind::Local);
+    if local_only.endpoints.is_empty() {
+        None
+    } else {
+        Some(local_only)
     }
 }
 
@@ -880,6 +915,50 @@ mod tests {
         );
         assert_eq!(ordered[1].0.kind, EndpointKind::Public);
         assert_eq!(ordered[2].0.kind, EndpointKind::Relay);
+    }
+
+    fn sample_descriptor(mode: ConnectionMode, endpoints: Vec<PeerEndpoint>) -> ConnectionDescriptor {
+        ConnectionDescriptor {
+            mode,
+            peer_id: "peer".into(),
+            public_key: String::new(),
+            endpoints,
+            relay: Some(crate::models::server::RelayDescriptor {
+                url: "wss://relay.sxmlauncher.dev".into(),
+                room_token: "room".into(),
+                region: None,
+                cert_fingerprint: None,
+            }),
+            session_token: "token".into(),
+            protocol_version: 767,
+        }
+    }
+
+    #[test]
+    fn relay_mode_still_tries_local_endpoints() {
+        let descriptor = sample_descriptor(
+            ConnectionMode::Relay,
+            vec![
+                PeerEndpoint::public("203.0.113.5:25565".parse().unwrap()),
+                PeerEndpoint::local("127.0.0.1:41234".parse().unwrap()),
+            ],
+        );
+        let attempt = direct_attempt(&descriptor).expect("local candidate");
+        assert_eq!(attempt.endpoints.len(), 1);
+        assert!(attempt.endpoints[0].addr.ip().is_loopback());
+        assert!(attempt
+            .relay
+            .as_ref()
+            .is_some_and(|relay| !relay.url.is_empty()));
+    }
+
+    #[test]
+    fn relay_mode_without_local_endpoints_skips_direct() {
+        let descriptor = sample_descriptor(
+            ConnectionMode::Relay,
+            vec![PeerEndpoint::public("203.0.113.5:25565".parse().unwrap())],
+        );
+        assert!(direct_attempt(&descriptor).is_none());
     }
 
     #[tokio::test]

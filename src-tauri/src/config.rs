@@ -38,6 +38,8 @@ pub const ELYBY_DEFAULT_CLIENT_ID: &str = "sxmlauncher3";
 pub const ELYBY_DEFAULT_REDIRECT_PORT: u16 = 25564;
 /// Port used for LAN world discovery beacons.
 pub const DEFAULT_LAN_PORT: u16 = 44511;
+/// Public relay used when a direct punch is not possible.
+pub const DEFAULT_RELAY_URL: &str = "wss://relay.sxmlauncher.dev";
 
 fn default_mqtt_broker() -> String {
     crate::network::mqtt::DEFAULT_MQTT_BROKER.to_string()
@@ -243,7 +245,9 @@ pub struct AppSettings {
     pub stun_servers: Vec<String>,
     /// Publish hosted worlds to the global browser by default.
     pub share_by_default: bool,
-    /// Advertise LAN endpoints to peers (off by default: leaks local topology).
+    /// Publish this machine's private LAN address on hosted sessions.
+    /// Loopback is published either way, so a second launcher on the same PC
+    /// can connect directly. On by default; turn off to hide LAN topology.
     pub expose_lan_endpoints: bool,
     pub max_hosted_players: u32,
     pub host_password: Option<String>,
@@ -307,13 +311,13 @@ impl Default for AppSettings {
             redis_url: "redis://127.0.0.1:6379/0".to_string(),
             mqtt_broker: crate::network::mqtt::DEFAULT_MQTT_BROKER.to_string(),
             mqtt_port: crate::network::mqtt::DEFAULT_MQTT_PORT,
-            relay_url: Some("wss://relay.sxmlauncher.dev".to_string()),
+            relay_url: Some(DEFAULT_RELAY_URL.to_string()),
             stun_servers: vec![
                 "stun.l.google.com:19302".to_string(),
                 "stun.cloudflare.com:3478".to_string(),
             ],
             share_by_default: true,
-            expose_lan_endpoints: false,
+            expose_lan_endpoints: true,
             max_hosted_players: 8,
             host_password: None,
             directory_enabled: true,

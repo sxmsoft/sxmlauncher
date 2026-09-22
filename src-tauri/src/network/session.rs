@@ -76,6 +76,13 @@ pub struct HostOptions {
     pub tags: Vec<String>,
     /// Force relay mode (diagnostics, or a host behind CGNAT with no punchable path).
     pub force_relay: bool,
+    /// Relay guests should dial. Blank or missing disables the fallback.
+    /// Comes from settings (`relay_url`), default `wss://relay.sxmlauncher.dev`.
+    pub relay_url: Option<String>,
+    /// Also publish this machine's private LAN address. Loopback is always
+    /// published when a punch socket exists, so a second launcher on the same
+    /// PC can connect without NAT.
+    pub expose_lan_endpoints: bool,
 }
 
 impl Default for HostOptions {
@@ -98,6 +105,8 @@ impl Default for HostOptions {
             region: None,
             tags: Vec::new(),
             force_relay: false,
+            relay_url: Some(crate::config::DEFAULT_RELAY_URL.to_string()),
+            expose_lan_endpoints: true,
         }
     }
 }
@@ -359,8 +368,10 @@ impl SessionManager {
         let local_address = punch_socket
             .as_ref()
             .and_then(|socket| socket.local_addr().ok());
+        // `0.0.0.0:port` is not a dialable candidate. Publish loopback (same
+        // machine) and, when asked, the private LAN address.
         if let Some(address) = local_address {
-            endpoints.push(PeerEndpoint::local(address));
+            endpoints.extend(host_endpoints(address, options.expose_lan_endpoints));
         }
 
         if !nat_behavior.is_punchable() {
@@ -408,24 +419,15 @@ impl SessionManager {
                 online: 0,
                 max: options.max_players,
             },
-            connection: ConnectionDescriptor {
-                mode: if options.force_relay || !nat_behavior.is_punchable() {
-                    ConnectionMode::Relay
-                } else {
-                    ConnectionMode::DirectP2p
-                },
-                peer_id: peer_id.clone(),
-                public_key: self.public_key.clone(),
-                endpoints: endpoints.clone(),
-                relay: options.force_relay.then(|| crate::models::server::RelayDescriptor {
-                    url: String::new(),
-                    room_token: session_token.clone(),
-                    region: options.region.clone(),
-                    cert_fingerprint: None,
-                }),
-                session_token: session_token.clone(),
-                protocol_version: protocol_version_for(&options.game_version),
-            },
+            connection: connection_for_host(
+                peer_id.clone(),
+                self.public_key.clone(),
+                nat_behavior,
+                &options,
+                endpoints.clone(),
+                session_token.clone(),
+                protocol_version_for(&options.game_version),
+            ),
             region: options.region.clone(),
             tags: options.tags.clone(),
             whitelist: options.whitelist.clone(),
@@ -753,6 +755,80 @@ impl SessionManager {
         }
         self.guests.clear();
     }
+}
+
+/// Build the descriptor guests dial.
+///
+/// Relay is attached whenever a URL is configured, including for punchable
+/// hosts, so a failed direct attempt can fall back. A blank URL means the
+/// user turned the relay off.
+fn connection_for_host(
+    peer_id: String,
+    public_key: String,
+    nat: NatBehavior,
+    options: &HostOptions,
+    endpoints: Vec<PeerEndpoint>,
+    session_token: String,
+    protocol_version: i32,
+) -> ConnectionDescriptor {
+    let direct = !options.force_relay && nat.is_punchable();
+    ConnectionDescriptor {
+        mode: if direct {
+            ConnectionMode::DirectP2p
+        } else {
+            ConnectionMode::Relay
+        },
+        peer_id,
+        public_key,
+        endpoints,
+        relay: configured_relay(options, &session_token),
+        session_token,
+        protocol_version,
+    }
+}
+
+fn configured_relay(options: &HostOptions, session_token: &str) -> Option<crate::models::server::RelayDescriptor> {
+    let url = options.relay_url.as_deref()?.trim();
+    if url.is_empty() {
+        return None;
+    }
+    Some(crate::models::server::RelayDescriptor {
+        url: url.to_string(),
+        room_token: session_token.to_string(),
+        region: options.region.clone(),
+        cert_fingerprint: None,
+    })
+}
+
+/// Dialable addresses for the punch socket.
+///
+/// The socket is bound to `0.0.0.0`, which is not a destination. Loopback is
+/// always included (same machine). Private LAN addresses are included when
+/// `expose_lan` is set.
+fn host_endpoints(bound: SocketAddr, expose_lan: bool) -> Vec<PeerEndpoint> {
+    let port = bound.port();
+    if port == 0 {
+        return Vec::new();
+    }
+    let mut endpoints = vec![PeerEndpoint::local(SocketAddr::from((
+        std::net::Ipv4Addr::LOCALHOST,
+        port,
+    )))];
+    if expose_lan {
+        if let Some(ip) = crate::network::localnet::primary_local_ipv4() {
+            if is_lan_ipv4(ip) {
+                let addr = SocketAddr::from((ip, port));
+                if !endpoints.iter().any(|endpoint| endpoint.addr == addr) {
+                    endpoints.push(PeerEndpoint::local(addr));
+                }
+            }
+        }
+    }
+    endpoints
+}
+
+fn is_lan_ipv4(ip: std::net::Ipv4Addr) -> bool {
+    ip.is_loopback() || ip.is_link_local() || ip.is_private()
 }
 
 /// How a join was addressed.
@@ -1191,7 +1267,107 @@ mod tests {
         assert_eq!(options.local_server.port(), DEFAULT_SERVER_PORT);
         assert!(options.public);
         assert!(!options.force_relay);
+        assert!(options.expose_lan_endpoints);
+        assert_eq!(
+            options.relay_url.as_deref(),
+            Some(crate::config::DEFAULT_RELAY_URL)
+        );
         assert_eq!(options.loader.kind, crate::models::instance::LoaderKind::Vanilla);
+    }
+
+    #[test]
+    fn strict_nat_listing_offers_the_configured_relay() {
+        let mut options = HostOptions::default();
+        options.relay_url = Some("wss://relay.sxmlauncher.dev".into());
+        let connection = connection_for_host(
+            "peer".into(),
+            "pk".into(),
+            NatBehavior::AddressDependent,
+            &options,
+            Vec::new(),
+            "room-token".into(),
+            767,
+        );
+        assert_eq!(connection.mode, ConnectionMode::Relay);
+        let relay = connection.relay.expect("relay descriptor");
+        assert_eq!(relay.url, "wss://relay.sxmlauncher.dev");
+        assert!(!relay.url.is_empty());
+        assert_eq!(relay.room_token, "room-token");
+    }
+
+    #[test]
+    fn force_relay_uses_the_configured_url() {
+        let mut options = HostOptions::default();
+        options.force_relay = true;
+        options.relay_url = Some("wss://relay.example.test:443".into());
+        let connection = connection_for_host(
+            "peer".into(),
+            "pk".into(),
+            NatBehavior::EndpointIndependent,
+            &options,
+            Vec::new(),
+            "room-token".into(),
+            767,
+        );
+        assert_eq!(connection.mode, ConnectionMode::Relay);
+        let relay = connection.relay.expect("relay descriptor");
+        assert_eq!(relay.url, "wss://relay.example.test:443");
+        assert!(!relay.url.is_empty());
+    }
+
+    #[test]
+    fn punchable_hosts_still_advertise_relay_fallback() {
+        let mut options = HostOptions::default();
+        options.relay_url = Some("wss://relay.sxmlauncher.dev".into());
+        let connection = connection_for_host(
+            "peer".into(),
+            "pk".into(),
+            NatBehavior::EndpointIndependent,
+            &options,
+            Vec::new(),
+            "room-token".into(),
+            767,
+        );
+        assert_eq!(connection.mode, ConnectionMode::DirectP2p);
+        assert!(connection
+            .relay
+            .as_ref()
+            .is_some_and(|relay| !relay.url.is_empty()));
+    }
+
+    #[test]
+    fn a_blank_relay_url_disables_the_fallback() {
+        let mut options = HostOptions::default();
+        options.force_relay = true;
+        options.relay_url = Some("   ".into());
+        let connection = connection_for_host(
+            "peer".into(),
+            "pk".into(),
+            NatBehavior::AddressDependent,
+            &options,
+            Vec::new(),
+            "room-token".into(),
+            767,
+        );
+        assert!(connection.relay.is_none());
+    }
+
+    #[test]
+    fn host_endpoints_publish_loopback_and_never_unspecified() {
+        let bound: SocketAddr = "0.0.0.0:41234".parse().expect("addr");
+        let hidden = host_endpoints(bound, false);
+        assert_eq!(hidden.len(), 1);
+        assert_eq!(hidden[0].addr, "127.0.0.1:41234".parse::<SocketAddr>().unwrap());
+        assert!(hidden.iter().all(|endpoint| !endpoint.addr.ip().is_unspecified()));
+
+        let exposed = host_endpoints(bound, true);
+        assert!(exposed.iter().any(|endpoint| endpoint.addr.ip().is_loopback()));
+        assert!(exposed.iter().all(|endpoint| !endpoint.addr.ip().is_unspecified()));
+        if let Some(ip) = crate::network::localnet::primary_local_ipv4() {
+            if is_lan_ipv4(ip) {
+                assert!(exposed.iter().any(|endpoint| endpoint.addr.ip() == ip));
+            }
+        }
     }
 
     #[test]

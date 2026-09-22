@@ -143,7 +143,7 @@ const settings: AppSettings = {
   relayUrl: "wss://relay.sxmlauncher.dev",
   stunServers: ["stun.l.google.com:19302", "stun.cloudflare.com:3478"],
   shareByDefault: true,
-  exposeLanEndpoints: false,
+  exposeLanEndpoints: true,
   maxHostedPlayers: 8,
   hostPassword: null,
   directoryEnabled: false,
