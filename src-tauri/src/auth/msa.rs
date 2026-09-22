@@ -18,11 +18,14 @@ use serde::{Deserialize, Serialize};
 use crate::error::{AppError, AppResult};
 use crate::models::account::{MinecraftUuid, SkinModel, SkinProfile, TokenSet};
 
-/// Public client id used by every third-party Minecraft launcher.
-pub const MSA_CLIENT_ID: &str = "00000000402b5328";
-/// `XboxLive.signin` grants the Xbox scopes; `offline_access` yields a refresh
-/// token (which is what lets us keep the player signed in).
-pub const MSA_SCOPE: &str = "XboxLive.signin offline_access";
+/// Public Azure AD client id used by open-source Minecraft launchers (Prism).
+///
+/// The legacy Xbox Live SDK id `00000000402b5328` is *not* registered on Azure
+/// AD and fails every authorize / device-code request with AADSTS700016.
+pub const MSA_CLIENT_ID: &str = "c36a9fb6-4f2a-41ff-90bd-ae7cc92031eb";
+/// Azure AD scopes Prism and other launchers request. Capitalisation matches
+/// the Xbox Live resource registration (`SignIn`, not `signin`).
+pub const MSA_SCOPE: &str = "XboxLive.SignIn XboxLive.offline_access";
 
 const AUTHORIZE_URL: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize";
 const TOKEN_URL: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token";
@@ -785,12 +788,12 @@ fn msa_error_hint(code: Option<&str>) -> Option<&'static str> {
         "invalid_client" => {
             "Microsoft does not accept this application id. Register your own public Azure \
              application (type “Mobile and desktop applications”, redirect URI \
-             `http://localhost`, delegated permission `XboxLive.signin`) and paste its client \
-             id into Settings → Fixes → Microsoft client id."
+             `http://localhost`, delegated permission `XboxLive.SignIn`) and paste its client \
+             id into Settings → Accounts → Microsoft client id."
         }
         "invalid_request" | "unsupported_response_type" => {
             "The sign-in request was rejected as malformed. Make sure the client id supports a \
-             `http://localhost` redirect and the `XboxLive.signin` scope."
+             `http://localhost` redirect and the `XboxLive.SignIn` scope."
         }
         "unauthorized_client" => {
             "This application id is not allowed to use this sign-in method. Device-code sign-in \

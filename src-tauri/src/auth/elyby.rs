@@ -9,7 +9,7 @@
 //! 2. **OAuth2** (`account.ely.by`) — browser based, no password ever touches the
 //!    launcher. Token exchange requires the exact trio `client_id`,
 //!    `client_secret`, `redirect_uri`; anything else fails with `invalid_client`
-//!    ("uygulama bulunamadı" in the browser).
+//!    ("uygulama bulunamadı" / "could not find application" in the browser).
 //!
 //! Both produce a Minecraft-shaped session (`accessToken` + profile) so the rest
 //! of the launcher never needs to know which one was used.
@@ -20,9 +20,19 @@ use serde::{Deserialize, Serialize};
 use crate::error::{AppError, AppResult};
 use crate::models::account::{MinecraftUuid, SkinModel, SkinProfile, TokenSet};
 
-/// Authlib-injector endpoint advertised to the JVM.
-pub const AUTHLIB_INJECTOR_URL: &str = "https://authserver.ely.by/api/authlib-injector";
+/// Ely.by authlib-injector *API* endpoint passed to the JVM as the agent argument.
+///
+/// This is **not** a jar download URL. The agent jar itself is provisioned from
+/// yushi.moe / BMCLAPI metadata (see `mods::AUTHLIB_INJECTOR_METADATA_URL`).
+pub const ELYBY_AUTHLIB_API_URL: &str = "https://authserver.ely.by/api/authlib-injector";
+/// Back-compat alias used by older call sites / tests.
+pub const AUTHLIB_INJECTOR_URL: &str = ELYBY_AUTHLIB_API_URL;
 /// Public OAuth client id used for the browser sign-in flow.
+///
+/// Must match an application registered at
+/// <https://account.ely.by/dev/applications> together with
+/// [`crate::config::ELYBY_DEFAULT_CLIENT_SECRET`] and the configured redirect URI.
+/// A mismatch produces Ely.by's "could not find application" page.
 pub const ELYBY_CLIENT_ID: &str = "sxmlauncher3";
 const AUTHSERVER: &str = "https://authserver.ely.by";
 /// Browser entry point. **No** `/auth` suffix: Ely.by's OAuth2 server serves the
@@ -33,6 +43,8 @@ const OAUTH_TOKEN_URL: &str = "https://account.ely.by/api/oauth2/v1/token";
 /// User info endpoint (needs the `account_info` scope).
 const ACCOUNT_INFO_URL: &str = "https://account.ely.by/api/account/v1/info";
 const SKIN_SYSTEM: &str = "https://skinsystem.ely.by";
+/// Deep link for registering a launcher OAuth application.
+pub const ELYBY_APP_REGISTRATION_URL: &str = "https://account.ely.by/dev/applications";
 
 /// Scope set needed to read the profile and keep a refresh token.
 pub const ELYBY_SCOPE: &str = "account_info offline_access minecraft_server_session";
@@ -256,9 +268,10 @@ impl ElyByAuth {
             let body = response.text().await.unwrap_or_default();
             return Err(AppError::Account(format!(
                 "Ely.by rejected the sign-in ({status}): {}. All three of client id, client \
-                 secret and redirect URI must match the application registered on ely.by \
-                 (see Settings → Fixes).",
-                summarize(&body)
+                 secret and redirect URI must match the application registered at {} \
+                 (configure them in Settings → Accounts).",
+                summarize(&body),
+                ELYBY_APP_REGISTRATION_URL
             )));
         }
         Ok(response.json::<ElyOAuthTokens>().await?)
@@ -458,34 +471,46 @@ impl ElyByAuth {
         Ok(())
     }
 
-    /// Resolve skin/cape URLs. Falls back to the deterministic texture URLs when
-    /// the profile endpoint gives us nothing useful.
-    pub async fn fetch_textures(&self, uuid: MinecraftUuid) -> AppResult<SkinProfile> {
+    /// Resolve skin/cape URLs for an Ely.by account.
+    ///
+    /// Ely.by's skinsystem indexes profiles by **username**, not UUID: a
+    /// `GET /profile/<uuid>` call returns HTTP 204 with an empty body even when
+    /// the player has a custom skin. We therefore look up by username first and
+    /// keep a durable PNG URL (`/skins/<name>.png`) as the last resort so the UI
+    /// never falls back to initials for a signed-in Ely.by account.
+    pub async fn fetch_textures(
+        &self,
+        uuid: MinecraftUuid,
+        username: &str,
+    ) -> AppResult<SkinProfile> {
         let plain_id = uuid.simple().to_string();
-        let response = self
-            .http
-            .get(format!("{SKIN_SYSTEM}/profile/{plain_id}"))
-            .header("User-Agent", "SXMLauncher/0.1")
-            .send()
-            .await
-            .map_err(|err| AppError::Network(format!("Ely.by texture lookup failed: {err}")))?;
+        let name = username.trim();
+        let profile = if !name.is_empty() {
+            self.load_texture_profile(name).await?
+        } else {
+            None
+        };
+        let profile = match profile {
+            Some(profile) => Some(profile),
+            None => self.load_texture_profile(&plain_id).await?,
+        };
 
-        if !response.status().is_success() {
-            // Not fatal: the player simply keeps the default skin.
-            return Ok(SkinProfile {
-                model: SkinModel::Classic,
-                skin_url: Some(format!("{SKIN_SYSTEM}/textures/{plain_id}")),
-                cape_url: None,
-            });
-        }
-
-        let profile: TextureProfile = response.json().await?;
         let decoded = profile
-            .properties
-            .iter()
-            .find(|property| property.name.as_deref() == Some("textures"))
-            .and_then(|property| property.value.as_deref())
-            .and_then(decode_texture_property);
+            .as_ref()
+            .and_then(|profile| {
+                profile
+                    .properties
+                    .iter()
+                    .find(|property| property.name.as_deref() == Some("textures"))
+                    .and_then(|property| property.value.as_deref())
+                    .and_then(decode_texture_property)
+            });
+
+        let fallback_png = if name.is_empty() {
+            format!("{SKIN_SYSTEM}/textures/{plain_id}")
+        } else {
+            format!("{SKIN_SYSTEM}/skins/{name}.png")
+        };
 
         Ok(SkinProfile {
             model: decoded
@@ -505,12 +530,58 @@ impl ElyByAuth {
                 .as_ref()
                 .and_then(|textures| textures.textures.skin.as_ref())
                 .and_then(|skin| skin.url.clone())
-                .or_else(|| Some(format!("{SKIN_SYSTEM}/textures/{plain_id}"))),
+                .map(prefer_https_texture_url)
+                .or(Some(fallback_png)),
             cape_url: decoded
                 .and_then(|textures| textures.textures.cape)
-                .and_then(|cape| cape.url),
+                .and_then(|cape| cape.url)
+                .map(prefer_https_texture_url),
         })
     }
+
+    /// `GET /profile/<id-or-name>` — `None` when the server has nothing useful.
+    async fn load_texture_profile(&self, id_or_name: &str) -> AppResult<Option<TextureProfile>> {
+        let response = self
+            .http
+            .get(format!("{SKIN_SYSTEM}/profile/{id_or_name}"))
+            .header("User-Agent", "SXMLauncher/0.1")
+            .send()
+            .await
+            .map_err(|err| AppError::Network(format!("Ely.by texture lookup failed: {err}")))?;
+
+        // 204 No Content is Ely.by's "no profile for this id" answer.
+        if response.status().as_u16() == 204 || response.status() == reqwest::StatusCode::NOT_FOUND
+        {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Ok(None);
+        }
+        let bytes = response.bytes().await.map_err(|err| {
+            AppError::Network(format!("Ely.by texture profile body failed: {err}"))
+        })?;
+        if bytes.is_empty() {
+            return Ok(None);
+        }
+        match serde_json::from_slice::<TextureProfile>(&bytes) {
+            Ok(profile) if !profile.properties.is_empty() => Ok(Some(profile)),
+            _ => Ok(None),
+        }
+    }
+}
+
+/// Upgrade known HTTP texture hosts to HTTPS so the Tauri webview can load them.
+fn prefer_https_texture_url(url: String) -> String {
+    if let Some(rest) = url.strip_prefix("http://ely.by/") {
+        return format!("https://ely.by/{rest}");
+    }
+    if let Some(rest) = url.strip_prefix("http://skinsystem.ely.by/") {
+        return format!("https://skinsystem.ely.by/{rest}");
+    }
+    if let Some(rest) = url.strip_prefix("http://textures.minecraft.net/") {
+        return format!("https://textures.minecraft.net/{rest}");
+    }
+    url
 }
 
 /// Base64-decode the `textures` property (Mojang's format, Ely.by reuses it).
@@ -610,6 +681,20 @@ mod tests {
             Some("https://s/s")
         );
         assert!(decoded.textures.cape.is_none());
+    }
+
+    #[test]
+    fn upgrades_http_ely_texture_urls_to_https() {
+        assert_eq!(
+            prefer_https_texture_url(
+                "http://ely.by/storage/skins/c8f42eb2b7fdd92a2a8d7189a34cc9a2.png".into()
+            ),
+            "https://ely.by/storage/skins/c8f42eb2b7fdd92a2a8d7189a34cc9a2.png"
+        );
+        assert_eq!(
+            prefer_https_texture_url("https://ely.by/storage/skins/x.png".into()),
+            "https://ely.by/storage/skins/x.png"
+        );
     }
 
     #[test]

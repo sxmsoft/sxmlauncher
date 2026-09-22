@@ -336,6 +336,11 @@ impl AccountManager {
     /// redirect URI, because Ely.by compares `redirect_uri` exactly — a random
     /// port (or the wrong `/callback` path) would produce their "can not find
     /// application you are trying to authorize" page even with a correct client id.
+    ///
+    /// If the browser shows that error, the client id / secret / redirect URI
+    /// trio does not match any app at <https://account.ely.by/dev/applications>;
+    /// register one (or paste working credentials into Settings → Accounts) and
+    /// prefer the username/password path until then.
     pub async fn begin_elyby_login(&self) -> AppResult<PendingLogin> {
         let state = oauth::random_state();
         let port = self.elyby_redirect_port();
@@ -368,7 +373,21 @@ impl AccountManager {
     /// Finish the Ely.by OAuth sign-in.
     pub async fn complete_elyby_login(&self, pending: PendingLogin) -> AppResult<AccountSummary> {
         let redirect_uri = pending.redirect_uri.clone();
-        let code = pending.wait_for_code().await?;
+        let code = match pending.wait_for_code().await {
+            Ok(code) => code,
+            Err(AppError::Account(message))
+                if message.contains("timed out waiting for the browser") =>
+            {
+                return Err(AppError::Account(format!(
+                    "{message}. If the browser said the application was not found \
+                     (“uygulama bulunamadı”), register an OAuth app at {} with redirect URI \
+                     exactly `{redirect_uri}`, then paste the client id and secret into \
+                     Settings → Accounts — or sign in with your Ely.by username and password.",
+                    elyby::ELYBY_APP_REGISTRATION_URL
+                )));
+            }
+            Err(err) => return Err(err),
+        };
 
         let tokens = self.elyby.exchange_code(&code, &redirect_uri).await?;
         // With `minecraft_server_session` the OAuth access token *is* the
@@ -376,7 +395,11 @@ impl AccountManager {
         let session = self.elyby.session_from_oauth(&tokens).await?;
         let uuid = session.uuid()?;
         let username = session.username()?;
-        let skin = self.elyby.fetch_textures(uuid).await.unwrap_or_default();
+        let skin = self
+            .elyby
+            .fetch_textures(uuid, &username)
+            .await
+            .unwrap_or_default();
 
         self.finalize_login(LoginOutcome {
             provider: AccountProvider::ElyBy,
@@ -397,7 +420,11 @@ impl AccountManager {
         let session = self.elyby.authenticate(username, password).await?;
         let uuid = session.uuid()?;
         let name = session.username()?;
-        let skin = self.elyby.fetch_textures(uuid).await.unwrap_or_default();
+        let skin = self
+            .elyby
+            .fetch_textures(uuid, &name)
+            .await
+            .unwrap_or_default();
 
         self.finalize_login(LoginOutcome {
             provider: AccountProvider::ElyBy,
@@ -605,7 +632,7 @@ impl AccountManager {
                             renamed.uuid = uuid;
                             renamed.skin = self
                                 .elyby
-                                .fetch_textures(uuid)
+                                .fetch_textures(uuid, &info.username)
                                 .await
                                 .unwrap_or_default();
                         }
@@ -682,7 +709,11 @@ impl AccountManager {
             AccountProvider::Microsoft => {
                 msa::fetch_skin_from_session_server(&self.http_for_skins(), account.uuid).await?
             }
-            AccountProvider::ElyBy => self.elyby.fetch_textures(account.uuid).await?,
+            AccountProvider::ElyBy => {
+                self.elyby
+                    .fetch_textures(account.uuid, &account.username)
+                    .await?
+            }
             AccountProvider::Offline => return Ok(account.skin),
         };
 

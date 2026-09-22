@@ -16,6 +16,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use serde::Deserialize;
+
 use crate::config::{AppPaths, AppSettings};
 use crate::error::{AppError, AppResult};
 use crate::jobs::JobTracker;
@@ -23,9 +25,16 @@ use crate::models::progress::{JobKind, JobStage, ProgressSink};
 use crate::models::modpack::{PackTarget, ResolvedPackPlan};
 use crate::store::Database;
 
-/// Official authlib-injector release (Ely.by consumes the same agent).
-pub const AUTHLIB_INJECTOR_URL: &str =
-    "https://github.com/elyby/authlib-injector/releases/latest/download/authlib-injector.jar";
+/// Primary metadata endpoint for the official authlib-injector agent jar.
+///
+/// Returns JSON with `download_url` + `checksums.sha256`. Do **not** confuse this
+/// with Ely.by's authlib *API* endpoint (`https://authserver.ely.by/api/authlib-injector`),
+/// which is passed to the JVM as `-javaagent:…jar=<api-url>` after the jar is on disk.
+pub const AUTHLIB_INJECTOR_METADATA_URL: &str =
+    "https://authlib-injector.yushi.moe/artifact/latest.json";
+/// BMCLAPI mirror of the same latest.json metadata (China-friendly fallback).
+pub const AUTHLIB_INJECTOR_METADATA_MIRROR_URL: &str =
+    "https://bmclapi2.bangbang93.com/mirrors/authlib-injector/artifact/latest.json";
 
 pub mod curseforge;
 pub mod downloader;
@@ -210,8 +219,9 @@ impl ModEngine {
 
     /// Ensure the authlib-injector agent jar is present (Ely.by accounts).
     ///
-    /// Exactly one copy is kept in the app root; the download itself is a normal
-    /// job, so it shows up in the Activity panel and can be cancelled.
+    /// Resolves the concrete download URL from yushi.moe / BMCLAPI `latest.json`
+    /// (the old GitHub `elyby/authlib-injector` asset path 404s), verifies the
+    /// published SHA-256, and keeps exactly one copy in the app root.
     pub async fn ensure_authlib_injector(
         &self,
         sink: Arc<dyn ProgressSink>,
@@ -222,14 +232,17 @@ impl ModEngine {
             return Ok(destination);
         }
 
-        let task = DownloadTask::new(
+        let artifact = resolve_authlib_injector_artifact(&self.http).await?;
+        let mut task = DownloadTask::new(
             crate::config::AUTHLIB_INJECTOR_JAR,
-            AUTHLIB_INJECTOR_URL,
+            artifact.download_url,
             destination.clone(),
-        );
+        )
+        .without_cache();
+        task = task.with_sha256(artifact.sha256);
         let tracker = Arc::new(JobTracker::start(
             JobKind::Launch,
-            "authlib-injector (Ely.by agent)",
+            format!("authlib-injector {}", artifact.version),
             JobStage::Downloading,
             sink,
         ));
@@ -296,5 +309,118 @@ impl ModEngine {
             })?;
         }
         Ok(())
+    }
+}
+
+/// Concrete authlib-injector jar chosen from a latest.json metadata document.
+#[derive(Debug, Clone)]
+struct AuthlibInjectorArtifact {
+    version: String,
+    download_url: String,
+    sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AuthlibLatestJson {
+    version: String,
+    download_url: String,
+    checksums: AuthlibChecksums,
+}
+
+#[derive(Debug, Deserialize)]
+struct AuthlibChecksums {
+    sha256: String,
+}
+
+/// Fetch latest.json from the primary host, falling back to the BMCLAPI mirror.
+async fn resolve_authlib_injector_artifact(
+    http: &reqwest::Client,
+) -> AppResult<AuthlibInjectorArtifact> {
+    let mut last_err = None;
+    for url in [
+        AUTHLIB_INJECTOR_METADATA_URL,
+        AUTHLIB_INJECTOR_METADATA_MIRROR_URL,
+    ] {
+        match fetch_authlib_latest_json(http, url).await {
+            Ok(artifact) => return Ok(artifact),
+            Err(err) => last_err = Some(err),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| {
+        AppError::Network("authlib-injector metadata could not be resolved".into())
+    }))
+}
+
+async fn fetch_authlib_latest_json(
+    http: &reqwest::Client,
+    url: &str,
+) -> AppResult<AuthlibInjectorArtifact> {
+    let response = http
+        .get(url)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|err| AppError::Network(format!("authlib-injector metadata ({url}): {err}")))?;
+    if !response.status().is_success() {
+        return Err(AppError::Network(format!(
+            "authlib-injector metadata: HTTP {} from {url}",
+            response.status()
+        )));
+    }
+    let body = response.text().await.map_err(|err| {
+        AppError::Network(format!("authlib-injector metadata body ({url}): {err}"))
+    })?;
+    parse_authlib_latest_json(&body)
+}
+
+fn parse_authlib_latest_json(body: &str) -> AppResult<AuthlibInjectorArtifact> {
+    let parsed: AuthlibLatestJson = serde_json::from_str(body).map_err(|err| {
+        AppError::Network(format!("authlib-injector metadata is not valid JSON: {err}"))
+    })?;
+    if parsed.download_url.trim().is_empty() {
+        return Err(AppError::Network(
+            "authlib-injector metadata has an empty download_url".into(),
+        ));
+    }
+    let sha256 = parsed.checksums.sha256.trim().to_ascii_lowercase();
+    if sha256.len() != 64 || !sha256.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(AppError::Network(format!(
+            "authlib-injector metadata has an invalid sha256 `{sha256}`"
+        )));
+    }
+    Ok(AuthlibInjectorArtifact {
+        version: parsed.version,
+        download_url: parsed.download_url,
+        sha256,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_yushi_latest_json() {
+        let body = r#"{
+          "build_number": 56,
+          "version": "1.2.8",
+          "download_url": "https://authlib-injector.yushi.moe/artifact/56/authlib-injector-1.2.8.jar",
+          "checksums": {
+            "sha256": "9c7f4343e6c82034958ffb48c14a2cb0c85928be7283103ce17da00c6d5a7b10"
+          }
+        }"#;
+        let artifact = parse_authlib_latest_json(body).expect("parse");
+        assert_eq!(artifact.version, "1.2.8");
+        assert!(artifact.download_url.contains("authlib-injector-1.2.8.jar"));
+        assert_eq!(
+            artifact.sha256,
+            "9c7f4343e6c82034958ffb48c14a2cb0c85928be7283103ce17da00c6d5a7b10"
+        );
+    }
+
+    #[test]
+    fn rejects_missing_checksum() {
+        let body = r#"{"version":"1.0","download_url":"https://x/a.jar","checksums":{"sha256":"nope"}}"#;
+        assert!(parse_authlib_latest_json(body).is_err());
     }
 }

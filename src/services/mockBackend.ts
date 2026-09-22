@@ -133,7 +133,7 @@ const settings: AppSettings = {
   autoProvisionJava: true,
   preferSystemJava: true,
   javaExtraRoots: [],
-  msaClientId: "00000000402b5328",
+  msaClientId: "c36a9fb6-4f2a-41ff-90bd-ae7cc92031eb",
   elybyClientId: "sxmlauncher3",
   elybyClientSecret: null,
   elybyRedirectUri: "http://localhost:25564/elyby/callback",

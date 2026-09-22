@@ -5,28 +5,33 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Stat } from "@/components/ui/feedback";
 import { useRefreshAccount, useRefreshSkin } from "@/hooks/queries";
-import { bodyUrl, bodyUrlFallback, capeUrl, fallbackGradient, monogram } from "@/lib/skins";
+import { bodyUrl, bodyUrlFallback, capeUrl, fallbackGradient, monogram, skinTextureUrl } from "@/lib/skins";
 import { cn } from "@/lib/utils";
 import { PROVIDER_LABEL, type AccountSummary } from "@/types/account";
 
 /**
  * Skin, cape and model preview for an account.
  *
- * Order: the provider's texture (rendered through mc-heads/crafatar from the
- * account id) → crafatar → a generated avatar. Offline profiles render through
- * the same services, which draw the default Steve/Alex skin for unknown names —
- * so an offline account always shows *something* recognisable instead of nothing.
+ * Ely.by textures come from the provider URL (mc-heads cannot resolve Ely UUIDs).
+ * Microsoft / offline use mc-heads → crafatar → monogram.
  */
 export function SkinPreview({ account, className }: { account: AccountSummary; className?: string }) {
   const [level, setLevel] = useState(0);
   const refresh = useRefreshSkin();
   const refreshAccount = useRefreshAccount();
   const cape = capeUrl(account);
+  const texture = skinTextureUrl(account);
 
   const bodySrc =
-    level === 0 ? bodyUrl(account, 320) : level === 1 ? bodyUrlFallback(account, 320) : null;
+    account.provider === "ely_by" && texture
+      ? texture
+      : level === 0
+        ? bodyUrl(account, 320)
+        : level === 1
+          ? bodyUrlFallback(account, 320)
+          : null;
 
-  const showMonogram = level >= 2;
+  const showMonogram = bodySrc == null;
   const canRefresh = account.provider !== "offline";
 
   return (
@@ -55,8 +60,14 @@ export function SkinPreview({ account, className }: { account: AccountSummary; c
               <img
                 src={bodySrc!}
                 alt={`${account.username}'s skin`}
-                className="mb-2 h-64 object-contain [image-rendering:pixelated] drop-shadow-[0_18px_35px_rgba(0,0,0,0.55)]"
-                onError={() => setLevel((current) => current + 1)}
+                className={cn(
+                  "mb-2 object-contain [image-rendering:pixelated] drop-shadow-[0_18px_35px_rgba(0,0,0,0.55)]",
+                  account.provider === "ely_by" && texture ? "h-48 w-48" : "h-64",
+                )}
+                onError={() => {
+                  if (account.provider === "ely_by") setLevel(2);
+                  else setLevel((current) => current + 1);
+                }}
               />
               {cape ? (
                 <img

@@ -138,7 +138,7 @@ export function SettingsPage() {
           {section === "downloads" ? <DownloadsSection draft={draft} patch={patch} /> : null}
           {section === "defaults" ? <DefaultsSection draft={draft} patch={patch} /> : null}
           {section === "network" ? <NetworkSection draft={draft} patch={patch} /> : null}
-          {section === "accounts" ? <AccountsSection /> : null}
+          {section === "accounts" ? <AccountsSection draft={draft} patch={patch} /> : null}
           {section === "storage" ? <StorageSection /> : null}
           {section === "updates" ? <UpdatesSection /> : null}
           {section === "diagnostics" ? <DiagnosticsSection /> : null}
@@ -514,37 +514,98 @@ function NetworkSection({ draft, patch }: SectionProps) {
   );
 }
 
-function AccountsSection() {
+function AccountsSection({ draft, patch }: SectionProps) {
   const vault = useVaultBackend();
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Accounts</CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        <div className="flex items-center gap-3">
-          <AccountMenu />
-          <span className="text-muted-foreground text-xs">
-            Tokens are written to the credential vault, never to disk in this app's data
-            directory.
-          </span>
-        </div>
-        <Separator />
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Stat label="Vault backend" value={vault.data ?? "unknown"} />
-          <Stat
-            label="Providers"
-            value="Microsoft · Ely.by · Offline"
-          />
-        </div>
-        <p className="text-muted-foreground text-xs leading-relaxed">
-          Signing out removes the refresh token from the vault immediately; the account entry
-          is kept so you can sign back in with one click. Access tokens live only for the
-          lifetime of a launch and are never written to disk.
-        </p>
-      </CardContent>
-    </Card>
+    <>
+      <Card>
+        <CardHeader>
+          <CardTitle>Accounts</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <div className="flex items-center gap-3">
+            <AccountMenu />
+            <span className="text-muted-foreground text-xs">
+              Tokens are written to the credential vault, never to disk in this app's data
+              directory.
+            </span>
+          </div>
+          <Separator />
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Stat label="Vault backend" value={vault.data ?? "unknown"} />
+            <Stat label="Providers" value="Microsoft · Ely.by · Offline" />
+          </div>
+          <p className="text-muted-foreground text-xs leading-relaxed">
+            Signing out removes the refresh token from the vault immediately; the account entry
+            is kept so you can sign back in with one click. Access tokens live only for the
+            lifetime of a launch and are never written to disk.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Microsoft OAuth</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <Field
+            label="Azure AD public client id"
+            hint="Defaults to the Prism Launcher public client. Override only if Microsoft rejects that id."
+          >
+            <Input
+              value={draft.msaClientId}
+              onChange={(event) => patch({ msaClientId: event.target.value.trim() })}
+              placeholder="c36a9fb6-4f2a-41ff-90bd-ae7cc92031eb"
+              spellCheck={false}
+            />
+          </Field>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Ely.by OAuth</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <Field
+            label="Client id"
+            hint="Must match an app at account.ely.by/dev/applications. Username/password sign-in does not need this."
+          >
+            <Input
+              value={draft.elybyClientId}
+              onChange={(event) => patch({ elybyClientId: event.target.value.trim() })}
+              spellCheck={false}
+            />
+          </Field>
+          <Field label="Client secret">
+            <Input
+              type="password"
+              value={draft.elybyClientSecret ?? ""}
+              onChange={(event) => patch({ elybyClientSecret: event.target.value || null })}
+              placeholder="paste the secret from Ely.by"
+              spellCheck={false}
+            />
+          </Field>
+          <Field
+            label="Redirect URI"
+            hint="Must match the registered redirect exactly, including port and path."
+          >
+            <Input
+              value={draft.elybyRedirectUri}
+              onChange={(event) => patch({ elybyRedirectUri: event.target.value.trim() })}
+              placeholder="http://localhost:25564/elyby/callback"
+              spellCheck={false}
+            />
+          </Field>
+          <p className="text-muted-foreground text-xs leading-relaxed">
+            A mismatched trio produces “could not find application” / “uygulama bulunamadı” in
+            the browser. Register the redirect URI above on Ely.by, then Save settings before
+            trying browser sign-in again.
+          </p>
+        </CardContent>
+      </Card>
+    </>
   );
 }
 

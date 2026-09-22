@@ -1,7 +1,14 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { cn } from "@/lib/utils";
-import { fallbackGradient, headStyle, headUrl, headUrlFallback, monogram } from "@/lib/skins";
+import {
+  fallbackGradient,
+  headStyle,
+  headUrl,
+  headUrlFallback,
+  monogram,
+  skinTextureUrl,
+} from "@/lib/skins";
 import type { AccountSummary } from "@/types/account";
 
 /**
@@ -22,8 +29,22 @@ export function AccountAvatar({
   className?: string;
 }) {
   const [level, setLevel] = useState(0);
-  const texture = account.skin.skinUrl;
+  const texture = skinTextureUrl(account);
   const slice = level === 0 ? headStyle(texture, size) : null;
+
+  // CSS backgrounds never fire onError — probe the texture with an Image so a
+  // dead URL (HTTP blocked, 204, etc.) advances to mc-heads / monogram.
+  useEffect(() => {
+    setLevel(0);
+    if (!texture) {
+      setLevel(1);
+      return;
+    }
+    const img = new Image();
+    img.onload = () => setLevel(0);
+    img.onerror = () => setLevel(1);
+    img.src = texture;
+  }, [texture]);
 
   const renderSrc =
     level === 1 ? headUrl(account, size * 2) : level === 2 ? headUrlFallback(account, size * 2) : null;

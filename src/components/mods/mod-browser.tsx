@@ -287,12 +287,14 @@ export function ModBrowser({
               cancel
             </button>
           </Badge>
+        ) : kind === "modpack" ? (
+          <Badge variant="primary">each pack creates its own instance</Badge>
         ) : instance ? (
           <Badge variant="primary">
             installing into {instance.name} · {instance.gameVersion}
           </Badge>
         ) : (
-          <Badge variant="warning">no instance selected — modpacks will create one</Badge>
+          <Badge variant="warning">no instance selected — pick one to install mods</Badge>
         )}
         {search.data ? (
           <span className="text-muted-foreground">

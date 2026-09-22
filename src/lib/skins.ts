@@ -100,7 +100,15 @@ export function capeUrl(account: AccountSummary): string | null {
 
 /** Raw skin texture, for the flat head slice and the texture download. */
 export function skinTextureUrl(account: AccountSummary): string | null {
-  return account.skin.skinUrl;
+  const url = account.skin.skinUrl;
+  if (!url) return null;
+  // Ely.by historically returns http://ely.by/storage/... — upgrade so the
+  // webview can fetch the PNG without mixed-content / cleartext blocks.
+  if (url.startsWith("http://ely.by/")) return `https://ely.by/${url.slice("http://ely.by/".length)}`;
+  if (url.startsWith("http://skinsystem.ely.by/")) {
+    return `https://skinsystem.ely.by/${url.slice("http://skinsystem.ely.by/".length)}`;
+  }
+  return url;
 }
 
 /**

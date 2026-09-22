@@ -30,10 +30,10 @@ type Tab = "microsoft" | "elyby" | "offline";
 /**
  * Sign-in for all three providers.
  *
- * Microsoft and Ely.by both use OAuth2 + PKCE against a loopback listener: we
- * open the system browser (never an embedded webview — that is what gets OAuth
- * apps blocked) and then wait for the redirect. Offline profiles need no
- * network at all and get a deterministic `OfflinePlayer:<name>` UUID.
+ * Microsoft uses OAuth2 + PKCE against a loopback listener (or device code).
+ * Ely.by prefers username/password (Authlib); browser OAuth needs a registered
+ * application on account.ely.by whose client id / secret / redirect URI match
+ * Settings → Accounts exactly.
  */
 export function LoginDialog({
   open,
@@ -121,7 +121,7 @@ export function LoginDialog({
                 sign-in is complete.
               </p>
             ) : null}
-            <DeviceCodeSection />
+            <DeviceCodeSection onSignedIn={onSignedIn} />
           </TabsContent>
 
           <TabsContent value="elyby" className="flex flex-col gap-4">
@@ -129,15 +129,8 @@ export function LoginDialog({
               Ely.by accounts carry custom skins and capes. The launcher attaches the
               Authlib endpoint to the JVM automatically.
             </p>
-            <Button
-              variant="outline"
-              onClick={() => startBrowserFlow("ely_by")}
-              loading={complete.isPending && tab === "elyby"}
-            >
-              <ExternalLink /> Sign in with Ely.by in the browser
-            </Button>
             <Card className="flex flex-col gap-3 p-4">
-              <span className="text-xs font-medium">…or use your Ely.by password</span>
+              <span className="text-xs font-medium">Sign in with username and password</span>
               <Field label="Username" htmlFor="ely-user">
                 <Input
                   id="ely-user"
@@ -170,6 +163,29 @@ export function LoginDialog({
                 Sign in
               </Button>
             </Card>
+            <div className="flex flex-col gap-2">
+              <Button
+                variant="outline"
+                onClick={() => startBrowserFlow("ely_by")}
+                loading={complete.isPending && tab === "elyby"}
+              >
+                <ExternalLink /> Sign in with Ely.by in the browser
+              </Button>
+              <p className="text-muted-foreground text-[11px] leading-relaxed">
+                Browser sign-in needs an OAuth application registered at{" "}
+                <button
+                  type="button"
+                  className="underline underline-offset-2"
+                  onClick={() => void openExternal("https://account.ely.by/dev/applications")}
+                >
+                  account.ely.by/dev/applications
+                </button>{" "}
+                whose client id, secret, and redirect URI match Settings → Accounts. A
+                mismatch shows “could not find application” / “uygulama bulunamadı” in the
+                browser — use the password form above, or paste working credentials in
+                Settings.
+              </p>
+            </div>
           </TabsContent>
 
           <TabsContent value="offline" className="flex flex-col gap-3">
@@ -209,8 +225,8 @@ export function LoginDialog({
   );
 }
 
-/** Device-code grant, for machines where opening a browser is not possible. */
-function DeviceCodeSection() {
+/** Device-code grant — opens the verification page and polls until complete. */
+function DeviceCodeSection({ onSignedIn }: { onSignedIn: () => void }) {
   const deviceCode = useLoginStore((state) => state.deviceCode);
   const busy = useLoginStore((state) => state.busy);
   const setDeviceCode = useLoginStore((state) => state.setDeviceCode);
@@ -221,35 +237,27 @@ function DeviceCodeSection() {
   const begin = async () => {
     setStarting(true);
     setBusy(true);
+    setError(null);
     try {
       const prompt = await accountService.beginDeviceCode();
       setDeviceCode(prompt);
       await openExternal(prompt.verificationUri);
+      // Poll automatically — no second click required.
+      const account = await accountService.completeDeviceCode(prompt);
+      toast.success(`Signed in as ${account.username}`);
+      onSignedIn();
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error));
-      toast.error(error, "Could not start the device-code sign-in");
+      toast.error(error, "Could not complete the device-code sign-in");
     } finally {
       setBusy(false);
       setStarting(false);
     }
   };
 
-  const finish = async () => {
-    if (!deviceCode) return;
-    setBusy(true);
-    try {
-      const account = await accountService.completeDeviceCode(deviceCode);
-      toast.success(`Signed in as ${account.username}`);
-    } catch (error) {
-      setError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   if (!deviceCode) {
     return (
-      <Button variant="ghost" size="sm" onClick={() => void begin()} loading={starting}>
+      <Button variant="ghost" size="sm" onClick={() => void begin()} loading={starting || busy}>
         Can't open a browser? Use a device code
       </Button>
     );
@@ -263,9 +271,9 @@ function DeviceCodeSection() {
       <Badge variant="primary" className="w-fit px-3 py-1 text-sm tracking-[0.2em]">
         {deviceCode.userCode}
       </Badge>
-      <Button size="sm" onClick={() => void finish()} loading={busy}>
-        I've entered the code
-      </Button>
+      <p className="text-muted-foreground text-[11px]">
+        {busy ? "Waiting for Microsoft…" : "Waiting for you to enter the code in the browser…"}
+      </p>
     </Card>
   );
 }

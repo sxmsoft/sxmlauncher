@@ -15,6 +15,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use rand::Rng;
 use sha1::{Digest, Sha1};
+use sha2::Sha256;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
 
@@ -34,6 +35,7 @@ pub struct DownloadTask {
     /// Final location (inside an instance `mods/` folder or `shared/`).
     pub destination: PathBuf,
     pub expected_sha1: Option<String>,
+    pub expected_sha256: Option<String>,
     pub expected_size: Option<u64>,
     /// Consult/populate the content-addressed cache (skip for tiny files).
     pub use_cache: bool,
@@ -46,6 +48,7 @@ impl DownloadTask {
             url: url.into(),
             destination,
             expected_sha1: None,
+            expected_sha256: None,
             expected_size: None,
             use_cache: true,
         }
@@ -56,8 +59,19 @@ impl DownloadTask {
         self
     }
 
+    pub fn with_sha256(mut self, sha256: impl Into<String>) -> Self {
+        self.expected_sha256 = Some(sha256.into().to_lowercase());
+        self
+    }
+
     pub fn with_size(mut self, size: u64) -> Self {
         self.expected_size = Some(size);
+        self
+    }
+
+    /// Skip the content-addressed SHA-1 cache (e.g. single-copy agent jars).
+    pub fn without_cache(mut self) -> Self {
+        self.use_cache = false;
         self
     }
 }
@@ -128,6 +142,21 @@ impl Downloader {
                         bytes,
                         from_cache: true,
                         sha1: Some(expected.clone()),
+                    });
+                }
+            } else if let Some(expected) = &task.expected_sha256 {
+                if self
+                    .verify_file_sha256(&task.destination, expected)
+                    .await?
+                {
+                    let bytes = file_size(&task.destination);
+                    tracker.advance(bytes).await;
+                    return Ok(DownloadOutcome {
+                        label: task.label,
+                        path: task.destination,
+                        bytes,
+                        from_cache: true,
+                        sha1: None,
                     });
                 }
             } else if task.expected_size.is_none_or(|size| file_size(&task.destination) == size) {
@@ -305,6 +334,7 @@ impl Downloader {
         // Report the total for this file too, so a batch of unknown sizes still
         // shows a meaningful bar once the first response headers arrive.
         let mut hasher = Sha1::new();
+        let mut sha256 = task.expected_sha256.as_ref().map(|_| Sha256::new());
 
         let mut file = tokio::fs::File::create(&partial).await?;
         let mut stream = response.bytes_stream();
@@ -321,6 +351,9 @@ impl Downloader {
                 AppError::Network(format!("{}: stream interrupted: {err}", task.label))
             })?;
             hasher.update(&chunk);
+            if let Some(sha256) = sha256.as_mut() {
+                sha256.update(&chunk);
+            }
             file.write_all(&chunk).await?;
             written += chunk.len() as u64;
 
@@ -341,6 +374,17 @@ impl Downloader {
                     file: task.label.clone(),
                     expected: expected.clone(),
                     actual: observed,
+                });
+            }
+        }
+        if let (Some(expected), Some(sha256)) = (&task.expected_sha256, sha256) {
+            let observed_sha256 = hex::encode(sha256.finalize());
+            if !observed_sha256.eq_ignore_ascii_case(expected) {
+                let _ = tokio::fs::remove_file(&partial).await;
+                return Err(AppError::HashMismatch {
+                    file: task.label.clone(),
+                    expected: expected.clone(),
+                    actual: observed_sha256,
                 });
             }
         }
@@ -377,6 +421,14 @@ impl Downloader {
         let path = path.to_path_buf();
         let expected = expected_sha1.to_lowercase();
         let observed = tokio::task::spawn_blocking(move || sha1_file(&path)).await??;
+        Ok(observed.eq_ignore_ascii_case(&expected))
+    }
+
+    /// `true` when the file exists and its SHA-256 matches.
+    pub async fn verify_file_sha256(&self, path: &Path, expected_sha256: &str) -> AppResult<bool> {
+        let path = path.to_path_buf();
+        let expected = expected_sha256.to_lowercase();
+        let observed = tokio::task::spawn_blocking(move || sha256_file(&path)).await??;
         Ok(observed.eq_ignore_ascii_case(&expected))
     }
 
@@ -472,6 +524,14 @@ pub fn sha1_bytes(bytes: &[u8]) -> String {
     let mut hasher = Sha1::new();
     hasher.update(bytes);
     hex::encode(hasher.finalize())
+}
+
+/// SHA-256 of a file, computed in a single streaming pass.
+pub fn sha256_file(path: &Path) -> AppResult<String> {
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher)?;
+    Ok(hex::encode(hasher.finalize()))
 }
 
 /// Hard-link when possible (same volume, instant), else copy.

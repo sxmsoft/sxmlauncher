@@ -1,62 +1,22 @@
-import { useEffect, useState } from "react";
-
 import { PageHeader } from "@/components/common/page-header";
 import { ModBrowser } from "@/components/mods/mod-browser";
-import { Badge } from "@/components/ui/badge";
-import { Select } from "@/components/ui/input";
-import { useInstances } from "@/hooks/queries";
-import { useUiStore } from "@/stores/ui";
 
 /**
- * Modpacks & mods.
+ * Modpacks.
  *
- * The target instance is chosen at the top and then threads through everything:
- * search results are filtered to its game version and loader, and installs land
- * in it. Installing a *modpack* creates its own instance instead — a pack is a
- * complete environment, not a set of files to merge.
+ * Installing a modpack always creates a **new** Ready instance (game version +
+ * loader + mods from the pack). There is no target-instance picker here — that
+ * belongs on the per-instance “browse mods” flow.
  */
 export function ModpacksPage() {
-  const instances = useInstances();
-  const selectedId = useUiStore((state) => state.selectedInstanceId);
-  const select = useUiStore((state) => state.selectInstance);
-  const [targetId, setTargetId] = useState<string | null>(selectedId);
-
-  // Follow the global selection when the user changes it elsewhere.
-  useEffect(() => {
-    setTargetId(selectedId);
-  }, [selectedId]);
-
-  const target = (instances.data ?? []).find((instance) => instance.id === targetId) ?? null;
-
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        title="Modpacks & mods"
-        description="Search Modrinth and CurseForge. Dependencies are resolved and hashes verified before anything lands in your instance."
-        actions={
-          <div className="flex items-center gap-2">
-            <Badge variant="outline">target</Badge>
-            <Select
-              value={targetId ?? ""}
-              onChange={(event) => {
-                const next = event.target.value || null;
-                setTargetId(next);
-                select(next);
-              }}
-              className="w-56"
-            >
-              <option value="">Choose an instance…</option>
-              {(instances.data ?? []).map((instance) => (
-                <option key={instance.id} value={instance.id}>
-                  {instance.name} · {instance.gameVersion}
-                </option>
-              ))}
-            </Select>
-          </div>
-        }
+        title="Modpacks"
+        description="Search Modrinth and CurseForge. Each pack install creates its own instance with the right loader and mods — no empty instance required."
       />
 
-      <ModBrowser instance={target} kind="modpack" />
+      <ModBrowser kind="modpack" />
     </div>
   );
 }

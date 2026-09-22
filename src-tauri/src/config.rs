@@ -21,13 +21,13 @@ use tauri::{AppHandle, Manager};
 use crate::error::{AppError, AppResult};
 use crate::models::instance::{InstancePaths, MemorySettings};
 
-/// Default public client id for the Microsoft/Xbox Live OAuth flow.
+/// Default public Azure AD client id for Microsoft / Xbox Live OAuth.
 ///
-/// This is the long-standing "Minecraft" public client that community launchers
-/// use: it is registered for the `XboxLive.signin` scope and for a
-/// `http://localhost` loopback redirect. Microsoft occasionally restricts access
-/// for third-party apps, so the value is user-editable from Settings → Fixes.
-pub const MSA_DEFAULT_CLIENT_ID: &str = "00000000402b5328";
+/// This is the Prism Launcher public client (`c36a9fb6-…`), which is registered
+/// for Azure AD v2 + PKCE + `http://localhost` loopback. The legacy Xbox Live
+/// SDK id `00000000402b5328` is **not** an Azure AD application and fails with
+/// AADSTS700016 on both the authorize and device-code endpoints.
+pub const MSA_DEFAULT_CLIENT_ID: &str = "c36a9fb6-4f2a-41ff-90bd-ae7cc92031eb";
 /// Default public client id for Ely.by OAuth.
 pub const ELYBY_DEFAULT_CLIENT_ID: &str = "sxmlauncher3";
 /// Ely.by issues the secret together with the client id; the OAuth2 token call
@@ -384,6 +384,11 @@ impl AppSettings {
         if self.msa_client_id.trim().is_empty() {
             self.msa_client_id = MSA_DEFAULT_CLIENT_ID.to_string();
         }
+        // Legacy Xbox Live SDK id is not an Azure AD app — swap it for the
+        // working public client so existing installs stop failing with AADSTS700016.
+        if self.msa_client_id.trim() == "00000000402b5328" {
+            self.msa_client_id = MSA_DEFAULT_CLIENT_ID.to_string();
+        }
         if self.elyby_client_id.trim().is_empty() {
             self.elyby_client_id = ELYBY_DEFAULT_CLIENT_ID.to_string();
         }
@@ -533,5 +538,13 @@ mod tests {
         assert_eq!(sanitized.ui_accent, "violet");
         assert_eq!(sanitized.ui_background_opacity, 1.0);
         assert_eq!(sanitized.ui_background_blur, 40);
+    }
+
+    #[test]
+    fn sanitizer_replaces_legacy_xbox_live_sdk_client_id() {
+        let mut settings = AppSettings::default();
+        settings.msa_client_id = "00000000402b5328".into();
+        let sanitized = settings.sanitized();
+        assert_eq!(sanitized.msa_client_id, MSA_DEFAULT_CLIENT_ID);
     }
 }
