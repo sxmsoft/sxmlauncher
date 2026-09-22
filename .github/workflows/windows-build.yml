@@ -1,0 +1,66 @@
+﻿name: Windows build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - cursor/sxmlauncher-rewrite-a8a2
+      - rewrite/v2
+      - main
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Disable updater artifacts for CI unsigned build
+        shell: pwsh
+        run: |
+          $p = "src-tauri/tauri.conf.json"
+          $j = Get-Content $p -Raw | ConvertFrom-Json
+          if ($j.bundle -ne $null) { $j.bundle | Add-Member -NotePropertyName createUpdaterArtifacts -NotePropertyValue $false -Force }
+          if ($j.plugins -and $j.plugins.updater) { $j.plugins.updater.active = $false }
+          ($j | ConvertTo-Json -Depth 30) | Set-Content $p -Encoding utf8
+
+      - name: Build Tauri app
+        run: pnpm build:app
+
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist-artifacts | Out-Null
+          Copy-Item src-tauri/target/release/sxmlauncher.exe dist-artifacts/SXMLauncher.exe -ErrorAction SilentlyContinue
+          Copy-Item src-tauri/target/release/SXMLauncher.exe dist-artifacts/SXMLauncher.exe -ErrorAction SilentlyContinue
+          Get-ChildItem src-tauri/target/release/bundle -Recurse -Include *.msi,*setup.exe -ErrorAction SilentlyContinue |
+            ForEach-Object { Copy-Item $_.FullName dist-artifacts/ -Force }
+          Get-ChildItem dist-artifacts | Format-Table Name, Length
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: SXMLauncher-windows
+          path: dist-artifacts/*
+          if-no-files-found: error
