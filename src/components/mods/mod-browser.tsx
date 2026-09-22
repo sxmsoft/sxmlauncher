@@ -174,7 +174,7 @@ export function ModBrowser({
 
   const installHit = (hit: ModSearchHit) => {
     if (hit.projectType === "modpack") {
-      installPack.mutate({ projectId: hit.id, name: hit.title });
+      installPack.mutate({ projectId: hit.id, name: hit.title, source: hit.source });
       return;
     }
     if (addPackTargetId) {
@@ -380,6 +380,7 @@ export function ModBrowser({
             projectId: detailPick.id,
             versionId,
             name: detailPick.title,
+            source: detailPick.source,
           });
           setDetailPick(null);
         }}
@@ -401,6 +402,7 @@ export function ModBrowser({
               projectId: versionPick.id,
               versionId: version.id,
               name: versionPick.title,
+              source: versionPick.source,
             });
           } else if (addPackTargetId) {
             addToPack.mutate({

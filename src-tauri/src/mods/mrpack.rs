@@ -143,6 +143,15 @@ pub fn manifest_file_id(pack_project_id: &str, path: &str) -> String {
 /// A hostile `.mrpack` could otherwise write anywhere on disk.
 pub fn normalize_relative_path(path: &str) -> AppResult<String> {
     let cleaned = path.replace('\\', "/");
+    // Windows drive letters (`C:/…`) are not absolute on Unix Path parsers, so
+    // reject them explicitly — a pack must never write outside the instance.
+    if let Some(first) = cleaned.split('/').next() {
+        if first.len() == 2 && first.as_bytes()[1] == b':' {
+            return Err(AppError::ModResolution(format!(
+                "the pack contains an unsafe path: {path}"
+            )));
+        }
+    }
     let candidate = Path::new(&cleaned);
     if candidate.is_absolute() {
         return Err(AppError::ModResolution(format!(

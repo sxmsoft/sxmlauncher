@@ -202,7 +202,6 @@ impl InstanceManager {
         let id = instance.config.id;
         self.db.set_instance_status(id, InstanceStatus::Installing)?;
 
-        let version_id = instance.config.resolved_version_id();
         // One stable job id for the whole install: every report below (Java
         // provisioning, downloads, natives, assets, done) carries it, so the
         // activity panel shows ONE job progressing instead of a new
@@ -215,7 +214,12 @@ impl InstanceManager {
             )
             .for_job(job_id)
             .stage(JobStage::Resolving)
-            .detail(format!("Minecraft {} · {}", instance.config.game_version, instance.config.loader.kind.as_str())),
+            .detail(format!(
+                "Minecraft {} · {} ({})",
+                instance.config.game_version,
+                instance.config.loader.kind.as_str(),
+                instance.config.resolved_version_id()
+            )),
         )
         .await;
 
@@ -291,7 +295,13 @@ impl InstanceManager {
             downloader,
             crate::mods::modrinth::http_client()?,
         );
-        let result = installer.install_version(&version_id, version_sink.clone()).await;
+
+        // Always install the vanilla parent first. Modded profiles inherit from
+        // it; installing only the loader leaves `inheritsFrom` unresolved.
+        let vanilla_id = instance.config.game_version.clone();
+        let result = installer
+            .install_version(&vanilla_id, version_sink.clone())
+            .await;
 
         if let Err(err) = &result {
             sink.report(
@@ -307,9 +317,35 @@ impl InstanceManager {
             // button gates on status, and a stuck status is how the launcher
             // ends up in an endless "preparing" state.
             let _ = self.db.set_instance_status(id, InstanceStatus::NotInstalled);
+            return Err(result.err().unwrap());
         }
 
-        result?;
+        // Layer the loader profile (Fabric/Quilt/Forge/NeoForge) on top.
+        if instance.config.loader.kind.is_modded() {
+            let loader_result = crate::instances::loader::install_loader(
+                &self.paths,
+                &instance.config.game_version,
+                &instance.config.loader,
+                downloader,
+                &crate::mods::modrinth::http_client()?,
+                version_sink.clone(),
+            )
+            .await;
+
+            if let Err(err) = &loader_result {
+                sink.report(
+                    ProgressEvent::started(
+                        JobKind::InstanceInstall,
+                        format!("Installing {} failed", instance.config.name),
+                    )
+                    .for_job(job_id)
+                    .failed(err.to_string()),
+                )
+                .await;
+                let _ = self.db.set_instance_status(id, InstanceStatus::NotInstalled);
+                return Err(loader_result.err().unwrap());
+            }
+        }
 
         // Refetch the row the installer may have touched, then flip to Ready:
         // status is derived from real files via `refresh`, so the Play button

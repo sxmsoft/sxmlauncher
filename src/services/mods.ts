@@ -36,11 +36,12 @@ export const modService = {
     call<ResolvedPackPlan>("mod_install", { instanceId, requests }),
 
   /** Download a `.mrpack`, install it and create the instance it needs. */
-  installModpack: (projectId: string, versionId?: string, name?: string) =>
+  installModpack: (projectId: string, versionId?: string, name?: string, source?: ModSource) =>
     call<Instance>("modpack_install", {
       projectId,
       versionId: versionId ?? null,
       name: name ?? null,
+      source: source ?? "modrinth",
     }),
 
   /**

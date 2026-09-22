@@ -99,11 +99,13 @@ export function useInstallModpack() {
       projectId,
       versionId,
       name,
+      source,
     }: {
       projectId: string;
       versionId?: string;
       name?: string;
-    }) => modService.installModpack(projectId, versionId, name),
+      source?: import("@/types/modpack").ModSource;
+    }) => modService.installModpack(projectId, versionId, name, source),
     onSuccess: (instance) => {
       void client.invalidateQueries({ queryKey: qk.instances });
       toast.success(`Modpack installed as “${instance.name}”`, "Ready to launch");

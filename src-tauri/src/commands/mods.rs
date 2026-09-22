@@ -7,7 +7,7 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::models::instance::{Instance, InstanceStatus, LoaderKind, ModLoader};
+use crate::models::instance::{Instance, LoaderKind, ModLoader};
 use crate::models::modpack::{
     ModProject, ModSearchQuery, ModSearchResults, ModSource, ModVersion, PackTarget,
     ResolvedPackPlan,
@@ -339,9 +339,20 @@ pub async fn modpack_install(
     project_id: String,
     version_id: Option<String>,
     name: Option<String>,
+    source: Option<ModSource>,
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> AppResult<Instance> {
+    let source = source.unwrap_or(ModSource::Modrinth);
+    if source == ModSource::CurseForge {
+        return Err(AppError::Unsupported(
+            "CurseForge modpack install is not supported yet — download the pack as an \
+             .mrpack from Modrinth, or create a vanilla/Fabric instance and add mods \
+             individually. CurseForge single-mod install still works."
+                .into(),
+        ));
+    }
+
     let engine = state.mods();
 
     // 1. Resolve the pack version.
@@ -366,23 +377,22 @@ pub async fn modpack_install(
         }
     };
 
-    // 2. Create the instance shell.
+    // 2. Create the instance shell. Loader/version are refined after the
+    //    `.mrpack` is read — we start with a vanilla placeholder so create()
+    //    does not try to install a loader we have not resolved yet.
+    let game_version_hint = version
+        .game_versions
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "1.20.1".to_string());
     let instance = state
         .instances()
         .create(
             crate::models::instance::CreateInstanceRequest {
                 name: name.unwrap_or_else(|| version.name.clone()),
                 description: Some(format!("Modpack {}", version.version_number)),
-                game_version: version
-                    .game_versions
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| "1.20.1".to_string()),
-                loader: Some(ModLoader {
-                    kind: LoaderKind::Fabric,
-                    version: None,
-                    build: None,
-                }),
+                game_version: game_version_hint,
+                loader: Some(ModLoader::vanilla()),
                 memory: None,
                 icon: None,
                 install_now: false,
@@ -393,7 +403,7 @@ pub async fn modpack_install(
 
     let root = state.instances().layout(instance.config.id).root();
 
-    // 3. Download the .mrpack and install it.
+    // 3. Download the .mrpack and install its files/overrides.
     let archive = state.paths.downloads.join(format!(
         "{}-{}.mrpack",
         version.project_id, version.id
@@ -419,18 +429,7 @@ pub async fn modpack_install(
         .install_mrpack(archive, root, sink_for(&app))
         .await?;
 
-    // 4. Record the pack as the instance's source.
-    let mut instance = state.instances().get(instance.config.id).await?;
-    instance.config.source_pack = Some(crate::models::modpack::ModpackRefSource {
-        source: ModSource::Modrinth,
-        project_id: project_id.clone(),
-        version_id: version.id.clone(),
-        name: version.name.clone(),
-        version_number: version.version_number.clone(),
-        icon_url: None,
-    });
-    instance.config.loader = plan.target.loader.clone();
-    instance.config.game_version = plan.target.game_version.clone();
+    // 4. Persist the pack metadata + the loader the manifest declared.
     state
         .instances()
         .update(crate::models::instance::UpdateInstanceRequest {
@@ -441,12 +440,36 @@ pub async fn modpack_install(
         })
         .await?;
 
+    // Stamp the source pack onto the on-disk config (update() does not cover it).
+    {
+        let mut stamped = state.instances().get(instance.config.id).await?;
+        stamped.config.source_pack = Some(crate::models::modpack::ModpackRefSource {
+            source: ModSource::Modrinth,
+            project_id: project_id.clone(),
+            version_id: version.id.clone(),
+            name: version.name.clone(),
+            version_number: version.version_number.clone(),
+            icon_url: None,
+        });
+        // Re-write directly so source_pack survives.
+        let layout = state.instances().layout(stamped.config.id);
+        let payload = serde_json::to_string_pretty(&stamped.config)?;
+        crate::config::write_atomic(&layout.config_file(), payload.as_bytes())?;
+        state.db.upsert_instance(&stamped)?;
+    }
+
     engine.record_installed(instance.config.id, &plan)?;
-    let refreshed = state.instances().refresh(instance.config.id).await?;
-    Ok(Instance {
-        status: InstanceStatus::Ready,
-        ..refreshed
-    })
+
+    // 5. Install vanilla + the loader profile. Without this step the instance
+    //    has mods on disk but no launchable version JSON — Play would fail with
+    //    "is not installed".
+    let mut instance = state.instances().get(instance.config.id).await?;
+    instance = state
+        .instances()
+        .install(instance, sink_for(&app))
+        .await?;
+
+    Ok(instance)
 }
 
 /// Detected Java runtimes.
