@@ -51,6 +51,8 @@ chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"
 url = "2"
 regex = "1"
+# Interface addresses for LAN candidates. `0.0.0.0` from a wildcard bind is not dialable.
+libc = "0.2"
 
 # --- local state --------------------------------------------------------
 parking_lot = "0.12"

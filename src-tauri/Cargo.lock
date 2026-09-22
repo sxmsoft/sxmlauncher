@@ -4571,6 +4571,7 @@ dependencies = [
  "futures",
  "hex",
  "keyring",
+ "libc",
  "parking_lot",
  "rand 0.8.8",
  "redis",

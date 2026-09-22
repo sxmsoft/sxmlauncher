@@ -482,7 +482,7 @@ function NetworkSection({ draft, patch }: SectionProps) {
           />
           <SettingRow
             title="Advertise local network endpoints"
-            description="On by default. Friends on the same LAN connect directly. Loopback is always shared so a second launcher on this PC can join. Turn off to hide private addresses."
+            description="On by default. Loopback and private LAN addresses are always shared so a second launcher on this PC can join when the relay hostname does not resolve. This switch also shares any other interface address."
             control={
               <Switch checked={draft.exposeLanEndpoints} onCheckedChange={(value) => patch({ exposeLanEndpoints: value })} />
             }

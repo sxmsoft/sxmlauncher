@@ -17,7 +17,7 @@
 //! which is far above what the game needs. Bulk transfers (world downloads) are
 //! routed through the relay transport instead.
 
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -294,16 +294,12 @@ impl Transport for DirectTransport {
             ));
         }
 
-        let socket = UdpSocket::bind(if self.bind.ip().is_unspecified() {
-            // Bind a same-stack loopback address so a host running in this very
-            // process (tests, local demos) can match us against its published
-            // loopback endpoint.
-            SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 0)
-        } else {
-            self.bind
-        })
-        .await
-        .map_err(|err| AppError::Transport(format!("cannot bind tunnel socket: {err}")))?;
+        // Bind the configured address (`0.0.0.0:0` in the app). A loopback-only
+        // socket cannot send to a LAN interface address, which is how a second
+        // launcher on this machine reaches the host when relay DNS fails.
+        let socket = UdpSocket::bind(self.bind)
+            .await
+            .map_err(|err| AppError::Transport(format!("cannot bind tunnel socket: {err}")))?;
 
         let mut last_error = None;
         for (endpoint, address) in candidates {

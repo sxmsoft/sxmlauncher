@@ -802,9 +802,10 @@ fn configured_relay(options: &HostOptions, session_token: &str) -> Option<crate:
 
 /// Dialable addresses for the punch socket.
 ///
-/// The socket is bound to `0.0.0.0`, which is not a destination. Loopback is
-/// always included (same machine). Private LAN addresses are included when
-/// `expose_lan` is set.
+/// The socket is bound to `0.0.0.0`, which is not a destination. Loopback and
+/// every private IPv4 interface are always published so a second launcher on
+/// this PC or LAN can connect when the relay hostname does not resolve.
+/// `expose_lan` also publishes any other interface address.
 fn host_endpoints(bound: SocketAddr, expose_lan: bool) -> Vec<PeerEndpoint> {
     let port = bound.port();
     if port == 0 {
@@ -814,17 +815,20 @@ fn host_endpoints(bound: SocketAddr, expose_lan: bool) -> Vec<PeerEndpoint> {
         std::net::Ipv4Addr::LOCALHOST,
         port,
     )))];
-    if expose_lan {
-        if let Some(ip) = crate::network::localnet::primary_local_ipv4() {
-            if is_lan_ipv4(ip) {
-                let addr = SocketAddr::from((ip, port));
-                if !endpoints.iter().any(|endpoint| endpoint.addr == addr) {
-                    endpoints.push(PeerEndpoint::local(addr));
-                }
-            }
+    for ip in crate::network::localnet::ipv4_interface_addresses() {
+        let private = is_lan_ipv4(ip) && !ip.is_loopback();
+        if expose_lan || private {
+            push_endpoint(&mut endpoints, SocketAddr::from((ip, port)));
         }
     }
     endpoints
+}
+
+fn push_endpoint(endpoints: &mut Vec<PeerEndpoint>, addr: SocketAddr) {
+    if addr.ip().is_unspecified() || endpoints.iter().any(|endpoint| endpoint.addr == addr) {
+        return;
+    }
+    endpoints.push(PeerEndpoint::local(addr));
 }
 
 fn is_lan_ipv4(ip: std::net::Ipv4Addr) -> bool {
@@ -1353,21 +1357,88 @@ mod tests {
     }
 
     #[test]
-    fn host_endpoints_publish_loopback_and_never_unspecified() {
+    fn host_endpoints_publish_loopback_and_every_interface() {
         let bound: SocketAddr = "0.0.0.0:41234".parse().expect("addr");
-        let hidden = host_endpoints(bound, false);
-        assert_eq!(hidden.len(), 1);
-        assert_eq!(hidden[0].addr, "127.0.0.1:41234".parse::<SocketAddr>().unwrap());
-        assert!(hidden.iter().all(|endpoint| !endpoint.addr.ip().is_unspecified()));
+        let loopback: SocketAddr = "127.0.0.1:41234".parse().expect("loopback");
+        let interfaces = crate::network::localnet::ipv4_interface_addresses();
 
-        let exposed = host_endpoints(bound, true);
-        assert!(exposed.iter().any(|endpoint| endpoint.addr.ip().is_loopback()));
-        assert!(exposed.iter().all(|endpoint| !endpoint.addr.ip().is_unspecified()));
-        if let Some(ip) = crate::network::localnet::primary_local_ipv4() {
-            if is_lan_ipv4(ip) {
-                assert!(exposed.iter().any(|endpoint| endpoint.addr.ip() == ip));
+        let hidden = host_endpoints(bound, false);
+        assert!(hidden.iter().any(|endpoint| endpoint.addr == loopback));
+        assert!(hidden.iter().all(|endpoint| !endpoint.addr.ip().is_unspecified()));
+        for ip in &interfaces {
+            if is_lan_ipv4(*ip) && !ip.is_loopback() {
+                assert!(
+                    hidden.iter().any(|endpoint| endpoint.addr.ip() == *ip),
+                    "private {ip} missing when LAN toggle is off"
+                );
             }
         }
+
+        let exposed = host_endpoints(bound, true);
+        assert!(exposed.iter().any(|endpoint| endpoint.addr == loopback));
+        assert!(exposed.iter().all(|endpoint| !endpoint.addr.ip().is_unspecified()));
+        for ip in &interfaces {
+            assert!(
+                exposed
+                    .iter()
+                    .any(|endpoint| endpoint.addr == SocketAddr::from((*ip, 41234))),
+                "{ip} was not published"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn same_machine_guest_can_punch_the_loopback_candidate() {
+        // Host binds the wildcard the way `host_world` does. The published
+        // candidate must be 127.0.0.1:<port>, not 0.0.0.0, and a second socket
+        // (the other launcher profile) must be able to complete a punch.
+        let host = tokio::net::UdpSocket::bind("0.0.0.0:0")
+            .await
+            .expect("bind host");
+        let bound = host.local_addr().expect("host addr");
+        let endpoints = host_endpoints(bound, true);
+        let target = endpoints
+            .iter()
+            .find(|endpoint| endpoint.addr.ip().is_loopback())
+            .expect("loopback candidate")
+            .addr;
+        assert_ne!(target.ip().to_string(), "0.0.0.0");
+
+        let token = "same-machine";
+        let ack = encode_punch(PunchKind::Ack, &holepunch::token_fingerprint(token));
+        let host_task = tokio::spawn(async move {
+            let mut buffer = [0u8; 128];
+            let (read, from) = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                host.recv_from(&mut buffer),
+            )
+            .await
+            .expect("host timed out")
+            .expect("recv");
+            assert!(decode_punch(&buffer[..read]).is_some());
+            host.send_to(&ack, from).await.expect("ack");
+        });
+
+        let guest = tokio::net::UdpSocket::bind("0.0.0.0:0")
+            .await
+            .expect("bind guest");
+        let punched = holepunch::punch_with_config(
+            &guest,
+            target,
+            token,
+            &PunchConfig {
+                timeout: std::time::Duration::from_secs(2),
+                probe_interval: std::time::Duration::from_millis(40),
+                stun_servers: Vec::new(),
+                stun_timeout: std::time::Duration::from_millis(200),
+            },
+        )
+        .await;
+        assert!(
+            punched.is_ok(),
+            "punch to {target} failed: {punched:?}"
+        );
+        host_task.await.expect("host task");
     }
 
     #[test]

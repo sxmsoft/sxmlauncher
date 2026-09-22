@@ -282,6 +282,60 @@ pub fn primary_local_ipv4() -> Option<Ipv4Addr> {
     }
 }
 
+/// Every non-loopback IPv4 address assigned to a local interface.
+///
+/// A punch socket bound to `0.0.0.0` reports that wildcard as `local_addr()`,
+/// which a guest cannot dial. These addresses are the real targets.
+pub fn ipv4_interface_addresses() -> Vec<Ipv4Addr> {
+    let mut found = Vec::new();
+    #[cfg(unix)]
+    unsafe {
+        let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
+        if libc::getifaddrs(&mut head) != 0 {
+            return primary_fallback();
+        }
+        let mut cursor = head;
+        while !cursor.is_null() {
+            let iface = &*cursor;
+            if let Some(ip) = ipv4_from_sockaddr(iface.ifa_addr) {
+                if publishable_interface(ip) && !found.contains(&ip) {
+                    found.push(ip);
+                }
+            }
+            cursor = iface.ifa_next;
+        }
+        libc::freeifaddrs(head);
+    }
+    #[cfg(not(unix))]
+    {
+        found = primary_fallback();
+    }
+    if found.is_empty() {
+        found = primary_fallback();
+    }
+    found
+}
+
+fn primary_fallback() -> Vec<Ipv4Addr> {
+    primary_local_ipv4().into_iter().collect()
+}
+
+fn publishable_interface(ip: Ipv4Addr) -> bool {
+    !ip.is_unspecified() && !ip.is_broadcast() && !ip.is_multicast() && !ip.is_loopback()
+}
+
+#[cfg(unix)]
+unsafe fn ipv4_from_sockaddr(addr: *const libc::sockaddr) -> Option<Ipv4Addr> {
+    if addr.is_null() {
+        return None;
+    }
+    if (*addr).sa_family != libc::AF_INET as libc::sa_family_t {
+        return None;
+    }
+    let v4 = &*(addr as *const libc::sockaddr_in);
+    Some(Ipv4Addr::from(u32::from_be(v4.sin_addr.s_addr)))
+}
+
 /// Announces local worlds and keeps a live map of the ones it hears about.
 ///
 /// One instance lives in [`crate::state::AppState`]; the maps are shared with the
@@ -706,6 +760,18 @@ mod tests {
     #[test]
     fn local_address_is_always_usable() {
         assert!(!local_address().is_empty());
+    }
+
+    #[test]
+    fn interface_addresses_skip_loopback_and_include_the_primary() {
+        let addrs = ipv4_interface_addresses();
+        assert!(addrs.iter().all(|ip| !ip.is_loopback() && !ip.is_unspecified()));
+        if let Some(primary) = primary_local_ipv4() {
+            assert!(
+                addrs.contains(&primary),
+                "primary {primary} missing from {addrs:?}"
+            );
+        }
     }
 }
 

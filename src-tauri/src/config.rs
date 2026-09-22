@@ -245,9 +245,10 @@ pub struct AppSettings {
     pub stun_servers: Vec<String>,
     /// Publish hosted worlds to the global browser by default.
     pub share_by_default: bool,
-    /// Publish this machine's private LAN address on hosted sessions.
-    /// Loopback is published either way, so a second launcher on the same PC
-    /// can connect directly. On by default; turn off to hide LAN topology.
+    /// Also publish non-private interface addresses on hosted sessions.
+    /// Loopback and RFC1918 addresses are always published, so a second
+    /// launcher on this PC can connect when the relay hostname does not resolve.
+    /// On by default.
     pub expose_lan_endpoints: bool,
     pub max_hosted_players: u32,
     pub host_password: Option<String>,
