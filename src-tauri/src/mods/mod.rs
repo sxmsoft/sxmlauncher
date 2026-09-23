@@ -19,16 +19,15 @@ use std::sync::Arc;
 use crate::config::{AppPaths, AppSettings};
 use crate::error::{AppError, AppResult};
 use crate::jobs::JobTracker;
-use crate::models::progress::{JobKind, JobStage, ProgressSink};
 use crate::models::modpack::{PackTarget, ResolvedPackPlan};
+use crate::models::progress::{JobKind, JobStage, ProgressSink};
 use crate::store::Database;
 
 /// Official authlib-injector metadata (sha256-verified download).
 ///
 /// Never use the broken `github.com/elyby/authlib-injector/.../authlib-injector.jar`
 /// URL — that release asset does not exist and fails every Ely.by launch.
-pub const AUTHLIB_INJECTOR_META: &str =
-    "https://authlib-injector.yushi.moe/artifact/latest.json";
+pub const AUTHLIB_INJECTOR_META: &str = "https://authlib-injector.yushi.moe/artifact/latest.json";
 /// BMCLAPI mirror of the same metadata JSON (China / CDN fallback).
 pub const AUTHLIB_INJECTOR_META_BMCLAPI: &str =
     "https://bmclapi2.bangbang93.com/mirrors/authlib-injector/artifact/latest.json";
@@ -53,11 +52,13 @@ pub mod modrinth;
 pub mod mrpack;
 pub mod resolver;
 
+pub use crate::models::modpack::MrpackManifest;
 pub use curseforge::{fingerprint, fingerprint_file, CurseForgeClient};
-pub use downloader::{sha1_bytes, sha1_file, sha256_file, DownloadOutcome, DownloadTask, Downloader};
+pub use downloader::{
+    sha1_bytes, sha1_file, sha256_file, DownloadOutcome, DownloadTask, Downloader,
+};
 pub use java_runtime::{required_java_major, required_major_for, JavaRegistry, JavaRuntime};
 pub use modrinth::ModrinthClient;
-pub use crate::models::modpack::MrpackManifest;
 pub use mrpack::InstalledJar;
 pub use resolver::{ModRegistry, ModRequest};
 
@@ -183,8 +184,8 @@ impl ModEngine {
         sink: Arc<dyn ProgressSink>,
     ) -> AppResult<ResolvedPackPlan> {
         let manifest_archive = archive.clone();
-        let manifest = tokio::task::spawn_blocking(move || mrpack::read_manifest(&manifest_archive))
-            .await??;
+        let manifest =
+            tokio::task::spawn_blocking(move || mrpack::read_manifest(&manifest_archive)).await??;
 
         let pack = mrpack::pack_reference(
             "unknown",
@@ -232,10 +233,7 @@ impl ModEngine {
     /// Resolves the latest build from the official metadata JSON (with a BMCLAPI
     /// fallback), verifies the published sha256, and stores one copy under the
     /// app root. The download is a normal cancelable job in the Activity panel.
-    pub async fn ensure_authlib_injector(
-        &self,
-        sink: Arc<dyn ProgressSink>,
-    ) -> AppResult<PathBuf> {
+    pub async fn ensure_authlib_injector(&self, sink: Arc<dyn ProgressSink>) -> AppResult<PathBuf> {
         let destination = self.paths.authlib_injector();
         let meta = self.fetch_authlib_meta().await?;
         let expected = meta.checksums.sha256.to_lowercase();
@@ -263,7 +261,8 @@ impl ModEngine {
             JobStage::Downloading,
             sink,
         ));
-        self.downloader.fetch(task, tracker).await?;
+        let fetched = self.downloader.fetch(task, tracker.clone()).await;
+        Downloader::settle(&tracker, fetched).await?;
         Ok(destination)
     }
 
@@ -312,17 +311,16 @@ impl ModEngine {
     /// Adopt a fresh API key without rebuilding the whole engine.
     pub fn with_settings(&self, settings: &AppSettings) -> AppResult<Self> {
         let mut engine = self.clone();
-        engine.curseforge = CurseForgeClient::new(
-            engine.http.clone(),
-            settings.curseforge_api_key.clone(),
-        );
+        engine.curseforge =
+            CurseForgeClient::new(engine.http.clone(), settings.curseforge_api_key.clone());
         engine.downloader = Downloader::new(
             engine.http.clone(),
             engine.paths.downloads.clone(),
             settings.max_concurrent_downloads,
         );
         // The Java roots list lives in settings, so the registry is rebuilt too.
-        engine.java = JavaRegistry::from_settings(engine.paths.clone(), engine.http.clone(), settings);
+        engine.java =
+            JavaRegistry::from_settings(engine.paths.clone(), engine.http.clone(), settings);
         Ok(engine)
     }
 
@@ -343,17 +341,18 @@ impl ModEngine {
         plan: &ResolvedPackPlan,
     ) -> AppResult<()> {
         for file in &plan.files {
-            self.db.upsert_installed_mod(&crate::store::instances::InstalledModRow {
-                instance_id,
-                source: file.source,
-                project_id: file.project_id.clone(),
-                version_id: file.version_id.clone(),
-                title: file.title.clone(),
-                file_name: file.file_name.clone(),
-                sha1: file.sha1.clone(),
-                enabled: true,
-                installed_at: chrono::Utc::now(),
-            })?;
+            self.db
+                .upsert_installed_mod(&crate::store::instances::InstalledModRow {
+                    instance_id,
+                    source: file.source,
+                    project_id: file.project_id.clone(),
+                    version_id: file.version_id.clone(),
+                    title: file.title.clone(),
+                    file_name: file.file_name.clone(),
+                    sha1: file.sha1.clone(),
+                    enabled: true,
+                    installed_at: chrono::Utc::now(),
+                })?;
         }
         Ok(())
     }

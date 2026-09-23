@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { Box, Download, ListFilter, Package, Plus, Search, TriangleAlert } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { ModCard } from "@/components/mods/mod-card";
 import { ModpackDetailDialog } from "@/components/mods/modpack-detail-dialog";
@@ -20,6 +21,7 @@ import {
   useDownloadMod,
   useInstallMods,
   useInstallModpack,
+  useInstances,
   useModSearch,
 } from "@/hooks/queries";
 import { useUiStore, toast } from "@/stores/ui";
@@ -137,6 +139,8 @@ export function ModBrowser({
   const hasInstances = (instance != null || selectedId != null) && !addPackTargetId;
   const targetId = instance?.id ?? selectedId ?? null;
 
+  const { t } = useTranslation();
+  const instances = useInstances();
   const installMods = useInstallMods(instance?.id ?? selectedId);
   const installPack = useInstallModpack();
   const downloadMod = useDownloadMod();
@@ -172,7 +176,17 @@ export function ModBrowser({
     source === "curseforge" && appInfo != null && !appInfo.curseforgeConfigured;
   const targetName = instance?.name ?? "the selected instance";
 
+  const libraryKey = (source: string, projectId: string) => `${source}:${projectId}`;
+  const installedPacks = new Set(
+    (instances.data ?? []).flatMap((entry) =>
+      entry.sourcePack ? [libraryKey(entry.sourcePack.source, entry.sourcePack.projectId)] : [],
+    ),
+  );
+  const packInLibrary = (hit: ModSearchHit) =>
+    hit.projectType === "modpack" && installedPacks.has(libraryKey(hit.source, hit.id));
+
   const installHit = (hit: ModSearchHit) => {
+    if (packInLibrary(hit)) return;
     if (hit.projectType === "modpack") {
       // Packs always create their own instance — never require a pre-selected one.
       installPack.mutate({ projectId: hit.id, name: hit.title, source: hit.source });
@@ -180,14 +194,11 @@ export function ModBrowser({
     }
     if (addPackTargetId) {
       addToPack.mutate({ source: hit.source, projectId: hit.id });
-      toast.success(`Added ${hit.title}`, `Pin more mods or play the pack from Custom Packs.`);
+      toast.success(t("browse.toastAdded", { title: hit.title }), t("browse.toastAddedBody"));
       return;
     }
     if (!targetId) {
-      toast.warning(
-        "No instance selected",
-        "Create an instance first, then install mods into it. Modpacks create an instance automatically.",
-      );
+      toast.warning(t("browse.toastNoInstance"), t("browse.toastNoInstanceBody"));
       return;
     }
     installMods.mutate([{ source: hit.source, projectId: hit.id }]);
@@ -222,7 +233,7 @@ export function ModBrowser({
             disabled={addToPack.isPending}
             onClick={() => {
               addToPack.mutate({ source: hit.source, projectId: hit.id });
-              toast.success(`Pinned ${hit.title}`, `Continue in Custom Packs.`);
+              toast.success(t("browse.toastAdded", { title: hit.title }), t("browse.toastAddedBody"));
             }}
           >
             <Plus className="size-3.5" />
@@ -254,7 +265,7 @@ export function ModBrowser({
           <Input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search mods and modpacks…"
+            placeholder={t("browse.searchPlaceholder")}
             className="pl-9"
           />
         </div>
@@ -288,6 +299,8 @@ export function ModBrowser({
               cancel
             </button>
           </Badge>
+        ) : kind === "modpack" ? (
+          <Badge variant="outline">{t("browse.packOwnInstance")}</Badge>
         ) : instance ? (
           <Badge variant="primary">
             installing into {instance.name} · {instance.gameVersion}
@@ -335,11 +348,11 @@ export function ModBrowser({
         ) : hits.length === 0 ? (
           <EmptyState
             icon={<Package />}
-            title="Nothing found"
+            title={t("browse.emptyTitle")}
             description={
               debouncedQuery
-                ? `No projects matched “${debouncedQuery}” on ${source}.`
-                : "Type a project name, or browse the most popular results."
+                ? t("browse.emptyQuery", { q: debouncedQuery, source })
+                : t("browse.emptyHint")
             }
           />
         ) : (
@@ -348,7 +361,14 @@ export function ModBrowser({
                   <ModCard
                     key={`${hit.source}-${hit.id}`}
                     hit={hit}
-                    actionLabel={hit.projectType === "modpack" ? "Install pack" : actionLabel}
+                    actionLabel={
+                      packInLibrary(hit)
+                        ? t("browse.inLibrary")
+                        : hit.projectType === "modpack"
+                          ? "Install pack"
+                          : actionLabel
+                    }
+                    installed={packInLibrary(hit)}
                     installing={installPack.isPending || installMods.isPending || addToPack.isPending}
                     onInstall={() => installHit(hit)}
                     onPickVersion={() => setVersionPick(hit)}
@@ -411,24 +431,22 @@ export function ModBrowser({
               projectId: versionPick.id,
               versionId: version.id,
             });
-            toast.success(`Pinned ${versionPick.title}`, "Continue in Custom Packs.");
+            toast.success(t("browse.toastAdded", { title: versionPick.title }), t("browse.toastAddedBody"));
           } else if (hasInstances) {
             installMods.mutate([
               { source: versionPick.source, projectId: versionPick.id, versionId: version.id },
             ]);
           } else {
-            toast.warning(
-              "No instance selected",
-              "Create an instance first, then install mods into it. Modpacks create an instance automatically.",
-            );
+            toast.warning(t("browse.toastNoInstance"), t("browse.toastNoInstanceBody"));
           }
           setVersionPick(null);
         }}
       />
 
       <p className="text-muted-foreground mt-4 text-[11px]">
-        Dependencies are resolved before anything is written: incompatible mods are reported
-        instead of silently installed into {targetName}.
+        {kind === "modpack"
+          ? t("browse.packOwnInstance")
+          : `Dependencies are resolved before anything is written: incompatible mods are reported instead of silently installed into ${targetName}.`}
       </p>
     </div>
   );

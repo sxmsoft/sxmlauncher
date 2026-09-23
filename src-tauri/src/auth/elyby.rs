@@ -36,6 +36,22 @@ const OAUTH_TOKEN_URL: &str = "https://account.ely.by/api/oauth2/v1/token";
 const ACCOUNT_INFO_URL: &str = "https://account.ely.by/api/account/v1/info";
 const SKIN_SYSTEM: &str = "https://skinsystem.ely.by";
 
+/// Ely.by texture URLs are often `http://`. The webview CSP allows `https:`
+/// images and blocks plain `http:` (except the asset host), so a stored http
+/// URL never paints and the preview falls through to Steve.
+pub fn https_texture_url(url: &str) -> String {
+    let trimmed = url.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let host = lower
+        .strip_prefix("http://")
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or("");
+    if host == "ely.by" || host.ends_with(".ely.by") {
+        return format!("https://{}", &trimmed["http://".len()..]);
+    }
+    trimmed.to_string()
+}
+
 /// Scope set needed to read the profile and keep a refresh token.
 pub const ELYBY_SCOPE: &str = "account_info offline_access minecraft_server_session";
 /// Client token Ely.by expects when the launcher owns the session lifecycle.
@@ -68,8 +84,9 @@ impl ElySession {
 
     pub fn uuid(&self) -> AppResult<MinecraftUuid> {
         let id = &self.profile()?.id;
-        MinecraftUuid::parse_str(id)
-            .map_err(|err| AppError::Account(format!("Ely.by returned an invalid uuid `{id}`: {err}")))
+        MinecraftUuid::parse_str(id).map_err(|err| {
+            AppError::Account(format!("Ely.by returned an invalid uuid `{id}`: {err}"))
+        })
     }
 
     pub fn username(&self) -> AppResult<String> {
@@ -283,11 +300,7 @@ impl ElyByAuth {
     }
 
     /// Exchange an authorization code for the OAuth2 tokens.
-    pub async fn exchange_code(
-        &self,
-        code: &str,
-        redirect_uri: &str,
-    ) -> AppResult<ElyOAuthTokens> {
+    pub async fn exchange_code(&self, code: &str, redirect_uri: &str) -> AppResult<ElyOAuthTokens> {
         let mut params = vec![
             ("client_id", self.client_id.clone()),
             ("grant_type", "authorization_code".to_string()),
@@ -313,7 +326,9 @@ impl ElyByAuth {
             .form(&params)
             .send()
             .await
-            .map_err(|err| AppError::Network(format!("Ely.by device code request failed: {err}")))?;
+            .map_err(|err| {
+                AppError::Network(format!("Ely.by device code request failed: {err}"))
+            })?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -389,7 +404,12 @@ impl ElyByAuth {
 
             let code = serde_json::from_str::<serde_json::Value>(&body)
                 .ok()
-                .and_then(|value| value.get("error").and_then(|error| error.as_str()).map(str::to_string));
+                .and_then(|value| {
+                    value
+                        .get("error")
+                        .and_then(|error| error.as_str())
+                        .map(str::to_string)
+                });
             match code.as_deref() {
                 Some("authorization_pending") => {
                     tokio::time::sleep(interval).await;
@@ -476,9 +496,11 @@ impl ElyByAuth {
                 summarize(&body)
             )));
         }
-        Ok(serde_json::from_str::<ElyOAuthTokens>(&body).map_err(|err| {
-            AppError::Account(format!("unexpected Ely.by refresh response: {err}"))
-        })?)
+        Ok(
+            serde_json::from_str::<ElyOAuthTokens>(&body).map_err(|err| {
+                AppError::Account(format!("unexpected Ely.by refresh response: {err}"))
+            })?,
+        )
     }
 
     /// Read the Minecraft profile attached to an OAuth2 access token.
@@ -503,9 +525,10 @@ impl ElyByAuth {
             )));
         }
 
-        response.json::<ElyAccountInfo>().await.map_err(|err| {
-            AppError::Account(format!("unexpected Ely.by profile response: {err}"))
-        })
+        response
+            .json::<ElyAccountInfo>()
+            .await
+            .map_err(|err| AppError::Account(format!("unexpected Ely.by profile response: {err}")))
     }
 
     /// Turn OAuth2 tokens into the Minecraft-shaped session the rest of the
@@ -568,9 +591,8 @@ impl ElyByAuth {
             )));
         }
 
-        serde_json::from_str::<ElySession>(&body).map_err(|err| {
-            AppError::Account(format!("unexpected Ely.by response: {err}"))
-        })
+        serde_json::from_str::<ElySession>(&body)
+            .map_err(|err| AppError::Account(format!("unexpected Ely.by response: {err}")))
     }
 
     /// Refresh an Authlib session.
@@ -654,7 +676,9 @@ impl ElyByAuth {
             // Not fatal: the player simply keeps the default skin.
             return Ok(SkinProfile {
                 model: SkinModel::Classic,
-                skin_url: Some(format!("{SKIN_SYSTEM}/textures/{plain_id}")),
+                skin_url: Some(https_texture_url(&format!(
+                    "{SKIN_SYSTEM}/textures/{plain_id}"
+                ))),
                 cape_url: None,
             });
         }
@@ -685,10 +709,12 @@ impl ElyByAuth {
                 .as_ref()
                 .and_then(|textures| textures.textures.skin.as_ref())
                 .and_then(|skin| skin.url.clone())
-                .or_else(|| Some(format!("{SKIN_SYSTEM}/textures/{plain_id}"))),
+                .or_else(|| Some(format!("{SKIN_SYSTEM}/textures/{plain_id}")))
+                .map(|url| https_texture_url(&url)),
             cape_url: decoded
                 .and_then(|textures| textures.textures.cape)
-                .and_then(|cape| cape.url),
+                .and_then(|cape| cape.url)
+                .map(|url| https_texture_url(&url)),
         })
     }
 }
@@ -744,7 +770,10 @@ mod tests {
             session.uuid().expect("uuid").to_string(),
             "069a79f4-44e9-4726-a5be-fca90e38aaf5"
         );
-        assert_eq!(session.into_token_set().refresh_token.as_deref(), Some("client-token"));
+        assert_eq!(
+            session.into_token_set().refresh_token.as_deref(),
+            Some("client-token")
+        );
     }
 
     #[test]
@@ -758,6 +787,22 @@ mod tests {
 
     fn encode_textures(payload: serde_json::Value) -> String {
         base64::engine::general_purpose::STANDARD.encode(payload.to_string())
+    }
+
+    #[test]
+    fn ely_texture_urls_are_upgraded_to_https() {
+        assert_eq!(
+            https_texture_url("http://ely.by/storage/skins/abc.png"),
+            "https://ely.by/storage/skins/abc.png"
+        );
+        assert_eq!(
+            https_texture_url("http://skinsystem.ely.by/textures/uuid"),
+            "https://skinsystem.ely.by/textures/uuid"
+        );
+        assert_eq!(
+            https_texture_url("https://textures.minecraft.net/texture/abc"),
+            "https://textures.minecraft.net/texture/abc"
+        );
     }
 
     #[test]
@@ -803,11 +848,8 @@ mod tests {
 
     #[test]
     fn authorize_url_matches_the_documented_oauth_flow() {
-        let auth = ElyByAuth::with_secret(
-            reqwest::Client::new(),
-            "sxmlauncher3",
-            "not-a-real-secret",
-        );
+        let auth =
+            ElyByAuth::with_secret(reqwest::Client::new(), "sxmlauncher3", "not-a-real-secret");
         let url = auth
             .authorize_url("http://localhost:25564/elyby/callback", "state-1")
             .expect("url");
@@ -850,11 +892,7 @@ mod tests {
         assert!(auth.browser_flow_is_device_code());
         assert!(auth.client_secret().is_none());
 
-        let custom = ElyByAuth::with_secret(
-            reqwest::Client::new(),
-            "my-web-app",
-            "real-secret",
-        );
+        let custom = ElyByAuth::with_secret(reqwest::Client::new(), "my-web-app", "real-secret");
         assert!(!custom.browser_flow_is_device_code());
     }
 

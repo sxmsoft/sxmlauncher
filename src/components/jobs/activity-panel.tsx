@@ -62,6 +62,7 @@ export function ActivityFeed({
   const jobs = useJobsStore((state) => state.jobs);
   const dismiss = useJobsStore((state) => state.dismiss);
   const clearFinished = useJobsStore((state) => state.clearFinished);
+  const { data: runningGames } = useRunningInstances();
 
   const active = jobs.filter((job) => !job.finished && !job.error);
   const done = jobs.filter((job) => job.finished || job.error);
@@ -70,6 +71,7 @@ export function ActivityFeed({
   const steadyCount = views.filter((view) => view.mode === "steady").length;
   const errorCount = views.filter((view) => view.mode === "error").length;
   const aggregate = aggregateProgress(active.filter((_, index) => views[index]?.mode === "work"));
+  const gameCount = runningGames?.length ?? 0;
 
   return (
     <div className={embedded ? "glass flex flex-col gap-3 rounded-[28px] p-4" : "flex min-h-0 flex-1 flex-col gap-3"}>
@@ -83,6 +85,8 @@ export function ActivityFeed({
           </Badge>
         ) : steadyCount > 0 ? (
           <Badge variant="success">{t("activity.running", { count: steadyCount })}</Badge>
+        ) : gameCount > 0 ? (
+          <Badge variant="success">{t("activity.running", { count: gameCount })}</Badge>
         ) : errorCount > 0 ? (
           <Badge variant="destructive">{t("activity.failedCount", { count: errorCount })}</Badge>
         ) : (
@@ -96,7 +100,7 @@ export function ActivityFeed({
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-1">
-        {active.length === 0 ? (
+        {active.length === 0 && gameCount === 0 ? (
           <div className="flex flex-col items-center gap-2 rounded-2xl border border-white/8 bg-black/20 px-4 py-8 text-center">
             <ArrowDownToLine className="size-6 text-[var(--muted-foreground)]" strokeWidth={1.5} />
             <p className="text-sm font-medium">{t("activity.emptyTitle")}</p>
@@ -126,7 +130,13 @@ export function ActivityFeed({
                 <span className="text-muted-foreground min-w-0 flex-1 truncate text-[11px]">
                   {job.error && !job.error.includes("cancelled")
                     ? `${job.label} — ${job.error}`
-                    : `${job.label} · ${job.error ? t("activity.stopped") : t("activity.done")}`}
+                    : `${job.label} · ${
+                        job.error
+                          ? t("activity.stopped")
+                          : job.kind === "p2p_host" || job.kind === "p2p_connect"
+                            ? t("activity.done")
+                            : t("activity.status.completedDownload")
+                      }`}
                 </span>
                 <Button variant="ghost" size="icon-sm" onClick={() => dismiss(job.jobId)}>
                   <X className="size-3" />

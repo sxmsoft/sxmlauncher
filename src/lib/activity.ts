@@ -71,6 +71,9 @@ function calmStatus(job: ProgressEvent, text: string): string {
   if (/listening|detected local/i.test(text)) return "Listening";
   if (/waiting for players/i.test(text)) return "Waiting for players";
   if (/\bpublished\b/i.test(text)) return "Session published";
+  if (job.stage === "done" && job.kind !== "p2p_host" && job.kind !== "p2p_connect") {
+    return "Completed download";
+  }
   if (job.stage === "running" || /^hosting\b/i.test(job.label) || job.stage === "registering") {
     return "Service Running";
   }
@@ -108,4 +111,20 @@ export function activityPresentation(job: ProgressEvent): ActivityPresentation {
   }
 
   return { mode: "work", status: STAGE_LABEL[job.stage], showProgress: true, progress };
+}
+
+/**
+ * The status strip's one line.
+ *
+ * Finished downloads stay in the job list so Activity can show "done", but they
+ * are not live work. A completed authlib-injector fetch must not keep the bar
+ * on Downloading after the game is already up.
+ */
+export function selectStatusJob(jobs: ProgressEvent[]): ProgressEvent | null {
+  const live = jobs.filter((job) => !job.finished && !job.error);
+  return (
+    live.find((job) => activityPresentation(job).mode === "work") ??
+    live.find((job) => activityPresentation(job).mode === "steady") ??
+    null
+  );
 }

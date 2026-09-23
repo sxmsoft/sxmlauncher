@@ -281,7 +281,8 @@ async fn vanilla_server_jar(
         JobStage::Downloading,
         sink,
     ));
-    engine.downloader().fetch(task, tracker).await?;
+    let fetched = engine.downloader().fetch(task, tracker.clone()).await;
+    crate::mods::Downloader::settle(&tracker, fetched).await?;
     Ok(destination)
 }
 
@@ -333,7 +334,8 @@ async fn fabric_like_server_jar(
         JobStage::Downloading,
         sink,
     ));
-    engine.downloader().fetch(task, tracker).await?;
+    let fetched = engine.downloader().fetch(task, tracker.clone()).await;
+    crate::mods::Downloader::settle(&tracker, fetched).await?;
     Ok(destination)
 }
 

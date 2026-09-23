@@ -83,8 +83,11 @@ struct ProjectResponse {
     followers: u64,
     #[serde(default)]
     categories: Vec<String>,
+    /// Minecraft versions. The sibling `versions` array is version ids and is
+    /// ignored here — treating those ids as game versions makes pack install
+    /// report that no downloadable file exists.
     #[serde(default)]
-    versions: Vec<String>,
+    game_versions: Vec<String>,
     #[serde(default)]
     loaders: Vec<String>,
     #[serde(default)]
@@ -187,9 +190,9 @@ impl ModrinthClient {
         let limit = query.limit.unwrap_or(24).clamp(1, 100);
         let offset = query.index.unwrap_or(0);
         let facets = build_facets(query);
-        let sort = normalize_sort(query.sort.as_deref());        // Every axis that shapes the result must be in the key: paging or
-        // re-sorting previously returned the *first* page again, so the
-        // browser could never advance past page 1.
+        let sort = normalize_sort(query.sort.as_deref()); // Every axis that shapes the result must be in the key: paging or
+                                                          // re-sorting previously returned the *first* page again, so the
+                                                          // browser could never advance past page 1.
         let cache_key = format!(
             "modrinth:search:{}:{}:{}:{}:{}:{}:{}",
             query.query.as_deref().unwrap_or(""),
@@ -242,13 +245,17 @@ impl ModrinthClient {
                 .collect(),
         };
 
-        self.store_cache(&cache_key, &results, SEARCH_TTL_SECS).await?;
+        self.store_cache(&cache_key, &results, SEARCH_TTL_SECS)
+            .await?;
         Ok(results)
     }
 
     /// Full project metadata (`id` may be an id or a slug).
     pub async fn project(&self, id: &str) -> AppResult<ModProject> {
-        let cache_key = format!("modrinth:project:{id}");
+        // v2: `game_versions` is Minecraft versions. The previous key stored
+        // version ids in that field, which made pack install look up a
+        // Minecraft version that does not exist.
+        let cache_key = format!("modrinth:project:v2:{id}");
         if let Some(cached) = self.cached::<ModProject>(&cache_key).await? {
             return Ok(cached);
         }
@@ -274,7 +281,7 @@ impl ModrinthClient {
             downloads: response.downloads,
             followers: response.followers,
             categories: response.categories,
-            game_versions: response.versions,
+            game_versions: response.game_versions,
             loaders: response.loaders,
             license: response
                 .license
@@ -284,7 +291,8 @@ impl ModrinthClient {
             server_side: response.server_side,
         };
 
-        self.store_cache(&cache_key, &project, PROJECT_TTL_SECS).await?;
+        self.store_cache(&cache_key, &project, PROJECT_TTL_SECS)
+            .await?;
         Ok(project)
     }
 
@@ -334,7 +342,8 @@ impl ModrinthClient {
             .get_json::<VersionResponse>(&format!("{MODRINTH_API}/version/{version_id}"))
             .await?;
         let version = version_from_response(response);
-        self.store_cache(&cache_key, &version, PROJECT_TTL_SECS).await?;
+        self.store_cache(&cache_key, &version, PROJECT_TTL_SECS)
+            .await?;
         Ok(version)
     }
 
@@ -405,9 +414,9 @@ impl ModrinthClient {
             let body = response.text().await.unwrap_or_default();
             return Err(match status.as_u16() {
                 404 => AppError::ModResolution("that project no longer exists on Modrinth".into()),
-                429 => AppError::Network(
-                    "Modrinth is rate limiting us; try again in a moment".into(),
-                ),
+                429 => {
+                    AppError::Network("Modrinth is rate limiting us; try again in a moment".into())
+                }
                 _ => AppError::Network(format!(
                     "Modrinth returned HTTP {status}: {}",
                     body.chars().take(200).collect::<String>()
@@ -586,6 +595,24 @@ mod tests {
     }
 
     #[test]
+    fn project_game_versions_are_minecraft_versions_not_ids() {
+        let raw = r#"{
+            "id": "abc",
+            "slug": "pack",
+            "title": "Pack",
+            "project_type": "modpack",
+            "versions": ["IIJJKKLL", "QQRRSSTT"],
+            "game_versions": ["1.20.1", "1.21.1"],
+            "loaders": ["fabric"]
+        }"#;
+        let response: ProjectResponse = serde_json::from_str(raw).expect("project");
+        assert_eq!(
+            response.game_versions,
+            vec!["1.20.1".to_string(), "1.21.1".to_string()]
+        );
+    }
+
+    #[test]
     fn facets_encode_project_type_version_and_loader() {
         let facets = build_facets(&query(Some("fabric"), Some("1.20.1"), vec![]));
         let parsed: Vec<Vec<String>> = serde_json::from_str(&facets).expect("valid facets json");
@@ -596,7 +623,11 @@ mod tests {
 
     #[test]
     fn facets_and_gameplay_categories_instead_of_oring_them() {
-        let facets = build_facets(&query(Some("fabric"), None, vec!["adventure", "optimization"]));
+        let facets = build_facets(&query(
+            Some("fabric"),
+            None,
+            vec!["adventure", "optimization"],
+        ));
         let parsed: Vec<Vec<String>> = serde_json::from_str(&facets).expect("valid facets");
         assert!(parsed.contains(&vec!["categories:adventure".to_string()]));
         assert!(parsed.contains(&vec!["categories:optimization".to_string()]));

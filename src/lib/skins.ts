@@ -29,7 +29,7 @@ export function identifierFor(account: AccountSummary): string {
 }
 
 /** One rectangular region of the 64×64 texture, in texture pixels. */
-interface Tile {
+export interface Tile {
   x: number;
   y: number;
   w: number;
@@ -45,7 +45,7 @@ const FACE: { head: Tile; hat: Tile } = {
   hat: { x: 40, y: 8, w: 8, h: 8 },
 };
 
-function textureSlices(textureUrl: string, tile: Tile, scale: number) {
+export function textureSlices(textureUrl: string, tile: Tile, scale: number) {
   return {
     backgroundImage: `url("${textureUrl}")`,
     backgroundSize: `${64 * scale}px ${64 * scale}px`,
@@ -100,7 +100,33 @@ export function capeUrl(account: AccountSummary): string | null {
 
 /** Raw skin texture, for the flat head slice and the texture download. */
 export function skinTextureUrl(account: AccountSummary): string | null {
-  return account.skin.skinUrl;
+  return publicTextureUrl(account.skin.skinUrl);
+}
+
+/**
+ * Ely.by serves many textures as `http://ely.by/...`. The webview allows
+ * `https:` images and blocks that host on `http:`, which is why a real skin
+ * URL still paints Steve (the Mojang fallback) or nothing.
+ */
+export function publicTextureUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const trimmed = url.trim();
+  const lower = trimmed.toLowerCase();
+  const host = lower.startsWith("http://") ? (lower.slice("http://".length).split("/")[0] ?? "") : "";
+  if (host === "ely.by" || host.endsWith(".ely.by")) {
+    return `https://${trimmed.slice("http://".length)}`;
+  }
+  return trimmed;
+}
+
+/** Ely.by skinsystem texture for a profile the account row has not filled in yet. */
+export function elySkinUrl(account: AccountSummary): string | null {
+  if (account.provider !== "ely_by") return null;
+  const stored = publicTextureUrl(account.skin.skinUrl);
+  if (stored) return stored;
+  const id = account.uuid.replace(/-/g, "");
+  if (id.length !== 32) return null;
+  return `https://skinsystem.ely.by/textures/${id}`;
 }
 
 /**

@@ -13,6 +13,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { applyAppearance } from "@/lib/appearance";
 import { qk } from "@/lib/query-client";
+import { applyWallpaperVideo } from "@/lib/wallpaper";
 import { systemService } from "@/services";
 
 export function useWallpaper(): void {
@@ -42,12 +43,7 @@ export function useWallpaper(): void {
 
     if (settings.uiBackgroundKind === "video") {
       const video = document.createElement("video");
-      video.src = src;
-      video.autoplay = true;
-      video.loop = true;
-      video.muted = true;
-      video.playsInline = true;
-      video.style.cssText = `width:100%;height:100%;object-fit:cover;opacity:${opacity};filter:blur(${blur}px);transform:scale(1.03);`;
+      applyWallpaperVideo(video, src, opacity, blur);
       layer.appendChild(video);
     } else {
       const wrapper = document.createElement("div");
@@ -63,14 +59,15 @@ function toAssetUrl(path: string): string | null {
   if (!trimmed) return null;
   if (/^(https?:|data:|blob:|asset:)/i.test(trimmed)) return trimmed;
   try {
-    // Tauri's asset protocol serves absolute paths when the app data / instance
-    // folders are in scope; fall back to a file URL otherwise.
-    const { convertFileSrc } = (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ as {
-      convertFileSrc?: (path: string) => string;
-    };
-    if (typeof convertFileSrc === "function") return convertFileSrc(trimmed);
+    // Tauri 2: `convertFileSrc` lives on the internals object and returns
+    // `http://asset.localhost/...`, which CSP `media-src` must allow.
+    const internals = (window as unknown as { __TAURI_INTERNALS__?: { convertFileSrc?: (path: string, protocol?: string) => string } })
+      .__TAURI_INTERNALS__;
+    if (typeof internals?.convertFileSrc === "function") {
+      return internals.convertFileSrc(trimmed, "asset");
+    }
   } catch {
     // plain browser: fall through to the raw path below.
   }
-  return `file://${trimmed.replace(/\\/g, "/")}`;
+  return null;
 }

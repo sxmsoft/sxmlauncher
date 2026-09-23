@@ -51,6 +51,31 @@ fn default_mqtt_port() -> u16 {
 
 /// Folder prefix for launcher-managed JDKs (`<app_data>/java/temurin-21`).
 pub const MANAGED_JAVA_PREFIX: &str = "temurin-";
+/// Copy `source` into `directory`, keeping only the file name.
+pub fn import_wallpaper_file(directory: &Path, source: &Path) -> AppResult<PathBuf> {
+    if source.starts_with(directory) {
+        return Ok(source.to_path_buf());
+    }
+    if !source.is_file() {
+        return Err(AppError::Config(format!(
+            "background file does not exist: {}",
+            source.display()
+        )));
+    }
+    std::fs::create_dir_all(directory)?;
+    let file_name = source.file_name().ok_or_else(|| {
+        AppError::Config(format!(
+            "background path has no file name: {}",
+            source.display()
+        ))
+    })?;
+    let destination = directory.join(file_name);
+    if destination != source {
+        std::fs::copy(source, &destination)?;
+    }
+    Ok(destination)
+}
+
 /// File name of the Ely.by authlib-injector agent jar.
 pub const AUTHLIB_INJECTOR_JAR: &str = "authlib-injector.jar";
 /// Maximum size of a server icon we accept into a Redis listing.
@@ -148,7 +173,8 @@ impl AppPaths {
     }
 
     pub fn version_json(&self, version_id: &str) -> PathBuf {
-        self.version_dir(version_id).join(format!("{version_id}.json"))
+        self.version_dir(version_id)
+            .join(format!("{version_id}.json"))
     }
 
     /// Per-instance layout helper.
@@ -167,6 +193,11 @@ impl AppPaths {
         self.java.join(format!("{MANAGED_JAVA_PREFIX}{major}"))
     }
 
+    /// User wallpaper copies. The asset protocol only serves files under app data.
+    pub fn wallpapers(&self) -> PathBuf {
+        self.root.join("wallpapers")
+    }
+
     /// authlib-injector agent jar (Ely.by and other Yggdrasil servers).
     ///
     /// Kept in the app root rather than per instance so it is downloaded once.
@@ -176,6 +207,13 @@ impl AppPaths {
 
     pub fn log_file(&self, name: &str) -> PathBuf {
         self.logs.join(format!("{name}.log"))
+    }
+
+    /// Copy a user-picked image or video into `wallpapers/` so the webview can
+    /// load it through the asset protocol. Files outside app data are refused
+    /// by the protocol scope even when CSP allows `media-src`.
+    pub fn import_wallpaper(&self, source: &Path) -> AppResult<PathBuf> {
+        import_wallpaper_file(&self.wallpapers(), source)
     }
 
     /// `true` when the root lives inside a portable folder (no OS app data).
@@ -419,8 +457,7 @@ impl AppSettings {
             self.elyby_client_secret = None;
         }
         if !self.elyby_redirect_uri.starts_with("http://") {
-            self.elyby_redirect_uri =
-                AppSettings::default().elyby_redirect_uri;
+            self.elyby_redirect_uri = AppSettings::default().elyby_redirect_uri;
         }
         // UI: an unknown background kind or accent would leave the window with no
         // styling at all, so both are whitelisted here rather than in the CSS.
@@ -511,7 +548,9 @@ mod tests {
     fn layout_is_derived_from_root() {
         let paths = AppPaths::from_root("/tmp/sxml-root");
         assert!(paths.instances.ends_with("instances"));
-        assert!(paths.version_json("1.20.1").ends_with("versions/1.20.1/1.20.1.json"));
+        assert!(paths
+            .version_json("1.20.1")
+            .ends_with("versions/1.20.1/1.20.1.json"));
         assert_eq!(paths.managed_java(21).file_name().unwrap(), "temurin-21");
     }
 
@@ -577,16 +616,35 @@ mod tests {
     }
 
     #[test]
+    fn wallpaper_import_copies_into_app_data() {
+        let root = std::env::temp_dir().join(format!("sxml-wall-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let source_dir = root.join("picked");
+        std::fs::create_dir_all(&source_dir).expect("mkdir");
+        let source = source_dir.join("loop.mp4");
+        std::fs::write(&source, b"video-bytes").expect("write");
+
+        let paths = AppPaths::from_root(root.join("app"));
+        let imported = paths.import_wallpaper(&source).expect("copy");
+        assert!(imported.starts_with(paths.wallpapers()));
+        assert_eq!(std::fs::read(&imported).expect("read"), b"video-bytes");
+        // A second save of the copied path must not nest another copy.
+        let again = paths.import_wallpaper(&imported).expect("already inside");
+        assert_eq!(again, imported);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn sanitizer_keeps_a_custom_accent_hex() {
         let mut settings = AppSettings::default();
         settings.ui_accent = "#7C5CfC".into();
-        assert_eq!(settings.sanitized().ui_accent, "#7C5CfC");
+        assert_eq!(settings.clone().sanitized().ui_accent, "#7C5CfC");
 
         settings.ui_accent = "#abc".into();
-        assert_eq!(settings.sanitized().ui_accent, "purple");
+        assert_eq!(settings.clone().sanitized().ui_accent, "purple");
 
         settings.ui_accent = "fuchsia".into();
-        assert_eq!(settings.sanitized().ui_accent, "magenta");
+        assert_eq!(settings.clone().sanitized().ui_accent, "magenta");
         settings.ui_accent = "violet".into();
         assert_eq!(settings.sanitized().ui_accent, "purple");
     }

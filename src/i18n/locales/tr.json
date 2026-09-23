@@ -41,7 +41,9 @@
     "ready": "Hazır",
     "playing": "Oyunda",
     "emptyTitle": "İlk örneğini oluştur",
-    "emptyBody": "Bir örnek; kendi modları, ayarları, kaynak paketleri ve dünyaları olan ayrı bir oyun ortamıdır.",
+    "emptyBody": "Kendi modları, ayarları, pack’leri, dünyaları. Vanilla, Fabric, Quilt, Forge, NeoForge.",
+    "signedOut": "Online için hesap ekle; tek kişilik için offline profil.",
+    "signedIn": "{{user}} olarak giriş yaptın. Instance seç veya arkadaşlara dünya aç.",
     "newInstance": "Yeni örnek",
     "join": "Kodla katıl",
     "noMods": "Henüz mod yok.",
@@ -67,6 +69,7 @@
     "import": "İçe aktar",
     "new": "Yeni örnek",
     "empty": "Bu filtreye uyan örnek yok.",
+    "neverPlayed": "hiç oynanmadı",
     "selected": "Seçili",
     "open": "Aç",
     "filters": {
@@ -82,7 +85,20 @@
     "subtitle": "Modrinth ve CurseForge mod paketleri. Paket kendi örneğini kurar; tekil modlar seçtiğin örneğe iner.",
     "target": "hedef",
     "choose": "Bir örnek seç…",
-    "custom": "Özel paketler"
+    "custom": "Özel paketler",
+    "inLibrary": "Kütüphanede",
+    "packOwnInstance": "Paketler kendi oyun sürümüyle kurulur.",
+    "searchPlaceholder": "Mod veya modpack ara…",
+    "emptyTitle": "Sonuç yok",
+    "emptyQuery": "“{{q}}” için {{source}}’ta eşleşme yok.",
+    "emptyHint": "Proje adı yaz veya popülerlere bak.",
+    "toastNoInstance": "Instance seçilmedi",
+    "toastNoInstanceBody": "Önce instance oluştur, sonra mod kur.",
+    "toastAdded": "{{title}} eklendi",
+    "toastAddedBody": "Custom Packs’ten devam.",
+    "toastInstalled": "{{n}} dosya kuruldu",
+    "toastPack": "Modpack “{{name}}” olarak kuruldu",
+    "toastPackReady": "Oynamaya hazır"
   },
   "host": {
     "title": "Sunucu",
@@ -107,7 +123,15 @@
     "addAction": "Hesap ekle",
     "active": "Etkin",
     "previewing": "Önizleme",
-    "connected": "Microsoft hesabı bağlı"
+    "connected": "Microsoft hesabı bağlı",
+    "uploadTitle": "Skin yükle",
+    "uploadMicrosoft": "Minecraft oturumunla doğrudan Mojang’a gider.",
+    "uploadEly": "Yükleme Ely.by’de. PNG’yi kontrol edip seni oraya yollarız.",
+    "uploadOffline": "Offline profilde skin yüklenmez.",
+    "authlibNote": "Ely.by skin’i Authlib ile JVM’e takılır; diğer Ely.by oyuncular görür. Değiştirdiysen “Reload skin”.",
+    "offlineFallback": "Offline’da varsayılan avatar: giriş yoksa çekilecek skin de yok.",
+    "uploadDrop": "PNG dosyasını bu sayfaya da bırakabilirsin.",
+    "choosePng": "PNG seç…"
   },
   "settings": {
     "title": "Ayarlar",
@@ -138,14 +162,14 @@
   "login": {
     "title": "Giriş yap",
     "body": "Microsoft ve Ely.by tarayıcıda açılır. Çevrimdışı profiller bu cihazda kalır. Parolalar işletim sistemi kasasında durur.",
-    "aside": "Örneklerin, paketlerin ve dünyaların tek başlatıcısı.",
+    "aside": "p2p dünyalar · modpack’ler",
     "microsoft": "Microsoft",
     "elyby": "Ely.by",
     "offline": "Çevrimdışı",
     "microsoftBody": "Minecraft giriş sayfası tarayıcıda açılır, sonra buraya döner. Çevrimiçi oyun için gerekir.",
     "continue": "Tarayıcıda devam et",
     "waiting": "Tarayıcının bitirmesi bekleniyor. Giriş tamam yazınca o sekmeyi kapatabilirsin.",
-    "elyBody": "Ely.by hesap sayfası açılır. Orada SXMLAUNCHER’ı onayla. Skin ve pelerin oyuna kendiliğinden eklenir.",
+    "elyBody": "Ely.by: özel skin ve cape. Authlib’i JVM’e biz bağlarız.",
     "elyBrowser": "Ely.by ile tarayıcıda gir",
     "elyPassword": "Ya da Ely.by parolanla gir",
     "username": "Kullanıcı adı",
@@ -206,6 +230,7 @@
       "registering": "Oturum yayınlanıyor",
       "running": "Çalışıyor",
       "done": "Bitti",
+      "completedDownload": "İndirme tamamlandı",
       "failed": "Başarısız",
       "starting": "Başlatılıyor…"
     }

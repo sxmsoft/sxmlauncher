@@ -1,4 +1,5 @@
 import { Download, Play, Zap } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { Badge, StatusDot } from "@/components/ui/badge";
 import { useInstallInstance, useLaunchInstance, useRunningInstances } from "@/hooks/queries";
@@ -19,6 +20,7 @@ export function InstanceCard({
   onSelect: () => void;
   onOpen: () => void;
 }) {
+  const { t } = useTranslation();
   const { data: running } = useRunningInstances();
   const hosting = useSessionsStore((state) => state.hostForInstance[instance.id]);
   const launch = useLaunchInstance();
@@ -86,7 +88,9 @@ export function InstanceCard({
 
         <div className="mt-auto flex items-center justify-between border-t border-[var(--border)] pt-3">
           <span className="text-[11px] text-[var(--text-faint)]">
-            {instance.lastPlayedAt ? `Last played ${formatRelative(instance.lastPlayedAt)}` : "Never played"}
+            {instance.lastPlayedAt
+              ? `${t("home.lastPlayed")} ${formatRelative(instance.lastPlayedAt)}`
+              : t("library.neverPlayed")}
           </span>
           <button
             type="button"

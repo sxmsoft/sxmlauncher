@@ -71,12 +71,12 @@ export function SkinPage() {
     Array.from(event.dataTransfer?.types ?? []).includes("Files");
 
   const onDragEnter = (event: DragEvent) => {
-    if (!draggingFiles(event) || !shown) return;
+    if (!draggingFiles(event) || !shown || shown.provider !== "microsoft") return;
     event.preventDefault();
     setDragDepth((depth) => depth + 1);
   };
   const onDragOver = (event: DragEvent) => {
-    if (!draggingFiles(event) || !shown) return;
+    if (!draggingFiles(event) || !shown || shown.provider !== "microsoft") return;
     event.preventDefault(); // required for the drop event to fire
     event.dataTransfer.dropEffect = "copy";
   };
@@ -88,20 +88,9 @@ export function SkinPage() {
     if (!draggingFiles(event)) return;
     event.preventDefault();
     setDragDepth(0);
-    if (!shown) return;
+    if (!shown || shown.provider !== "microsoft") return;
     const file = event.dataTransfer?.files?.[0];
     if (!file) return;
-    if (shown.provider === "offline") {
-      // Mirror the disabled "Choose PNG…" button instead of a cryptic
-      // backend rejection toast.
-      setUploadOutcome({
-        uploaded: false,
-        skin: shown.skin,
-        message: "Offline profiles have no provider to upload to.",
-        url: null,
-      });
-      return;
-    }
     void handleSkinFile(file);
   };
 
@@ -222,15 +211,15 @@ export function SkinPage() {
     });
   };
 
-  /** Provider copy for the upload card. */
-  const uploadHint: string | null =
+  const canUpload = shown?.provider === "microsoft";
+  const uploadHint =
     shown == null
       ? null
       : shown.provider === "microsoft"
-        ? "Uploaded straight to Mojang with your Minecraft session."
+        ? t("profile.uploadMicrosoft")
         : shown.provider === "ely_by"
-          ? "Ely.by serves uploads on its website — the launcher validates your PNG and hands you off."
-          : "Offline profiles have no provider to upload to.";
+          ? t("profile.uploadEly")
+          : t("profile.uploadOffline");
 
   return (
     <div
@@ -306,16 +295,17 @@ export function SkinPage() {
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <Upload className="size-4" /> Upload a skin
+                  <Upload className="size-4" /> {t("profile.uploadTitle")}
                 </CardTitle>
               </CardHeader>
               <CardContent className="flex flex-col gap-3">
                 <p className="text-muted-foreground text-xs leading-relaxed">{uploadHint}</p>
 
-                <p className="text-muted-foreground/70 text-[11px] leading-relaxed">
-                  You can also drag a skin PNG anywhere onto this page — it goes
-                  through the same checks as the file picker.
-                </p>
+                {canUpload ? (
+                  <p className="text-muted-foreground/70 text-[11px] leading-relaxed">
+                    {t("profile.uploadDrop")}
+                  </p>
+                ) : null}
 
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-muted-foreground text-xs font-medium">Arm model</span>
@@ -330,6 +320,7 @@ export function SkinPage() {
                         type="button"
                         role="radio"
                         aria-checked={uploadModel === model}
+                        disabled={!canUpload}
                         onClick={() => setUploadModel(model)}
                         className={
                           "px-3 py-1.5 text-xs font-medium capitalize transition-colors " +
@@ -347,11 +338,11 @@ export function SkinPage() {
 
                   <Button
                     size="sm"
-                    disabled={shown.provider === "offline"}
+                    disabled={!canUpload}
                     loading={uploadSkin.isPending}
                     onClick={() => fileInput.current?.click()}
                   >
-                    <Upload className="size-4" /> Choose PNG…
+                    <Upload className="size-4" /> {t("profile.choosePng")}
                   </Button>
                 </div>
 
@@ -440,15 +431,6 @@ export function SkinPage() {
             </Card>
 
             <div className="grid grid-cols-2 gap-2.5">
-              <button
-                type="button"
-                className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-2)] p-4 text-left hover:border-[var(--border-strong)] hover:bg-[var(--accent-dim)]"
-                onClick={() => fileInput.current?.click()}
-              >
-                <Upload className="mb-2 size-3.5 text-[var(--accent-soft)]" />
-                <div className="text-[13px] font-semibold">Upload skin</div>
-                <div className="text-[11px] text-[var(--text-faint)]">PNG 64×64</div>
-              </button>
               <button
                 type="button"
                 className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-2)] p-4 text-left hover:border-[var(--border-strong)] hover:bg-[var(--accent-dim)]"
@@ -542,8 +524,7 @@ export function SkinPage() {
               })}
 
               <p className="text-muted-foreground mt-2 text-xs leading-relaxed">
-                Offline profiles always render the fallback avatar: without a signed-in
-                provider there is no skin texture to fetch.
+                {t("profile.offlineFallback")}
               </p>
             </CardContent>
           </Card>
