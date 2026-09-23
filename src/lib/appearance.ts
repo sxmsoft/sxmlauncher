@@ -5,6 +5,7 @@
  * Font scale is frontend-only (no settings field yet) and lives in localStorage.
  */
 
+import { useAccentMarkStore } from "@/stores/accent";
 import type { AppSettings } from "@/types/system";
 
 export const THEME_PRESETS = [
@@ -16,14 +17,36 @@ export const THEME_PRESETS = [
   { id: "custom", label: "Custom", hint: "Charcoal base, your accent", colors: ["#101012", "#1C1C20", "#8B5CF6"] },
 ] as const;
 
-export const ACCENT_CHIPS = [
-  { id: "violet", label: "Violet", hex: "#8B5CF6" },
-  { id: "purple", label: "Purple", hex: "#A855F7" },
-  { id: "fuchsia", label: "Fuchsia", hex: "#E879F9" },
-  { id: "indigo", label: "Indigo", hex: "#6366F1" },
+/**
+ * Locked swatch set. Each id is a crystalline S PNG in `public/brand/`.
+ * Purple is the default galactic accent.
+ */
+export const ACCENT_PRESETS = [
+  { id: "purple", label: "Purple", hex: "#8B5CF6" },
   { id: "cyan", label: "Cyan", hex: "#38BDF8" },
-  { id: "emerald", label: "Emerald", hex: "#34D399" },
+  { id: "magenta", label: "Magenta", hex: "#E879F9" },
+  { id: "emerald", label: "Emerald", hex: "#10B981" },
+  { id: "amber", label: "Amber", hex: "#F59E0B" },
+  { id: "silver", label: "Silver", hex: "#D4D4D8" },
 ] as const;
+
+export type AccentId = (typeof ACCENT_PRESETS)[number]["id"];
+
+/** Settings chips are the swatch presets. */
+export const ACCENT_CHIPS = ACCENT_PRESETS;
+
+/** Older saved ids still resolve onto a swatch. */
+const LEGACY_ACCENT: Record<string, AccentId> = {
+  violet: "purple",
+  purple: "purple",
+  fuchsia: "magenta",
+  magenta: "magenta",
+  indigo: "purple",
+  cyan: "cyan",
+  emerald: "emerald",
+  amber: "amber",
+  silver: "silver",
+};
 
 const FONT_SCALE_KEY = "sxmlauncher.font-scale";
 
@@ -80,16 +103,66 @@ function lighten(hex: string, amount = 0.42): string {
   return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
 }
 
-/**
- * Named chips or a live `#rrggbb` from the color picker.
- * Unknown values fall back to galactic purple (violet).
- */
-export function resolveAccent(uiAccent: string | null | undefined): { id: string; hex: string } {
-  if (uiAccent && HEX_COLOR.test(uiAccent)) {
-    return { id: "custom", hex: uiAccent.toLowerCase() };
+export interface ResolvedAccent {
+  /** Preset id, or `custom` when the picker hex is not one of the six. */
+  id: string;
+  /** Color painted into `--accent`. */
+  hex: string;
+  /** PNG slot. Always one of the six swatches. */
+  mark: AccentId;
+}
+
+function channel(hex: string, start: number): number {
+  return Number.parseInt(hex.replace("#", "").slice(start, start + 2), 16);
+}
+
+/** Closest swatch when the player picks a hex that is not a preset. */
+export function nearestAccent(hex: string): AccentId {
+  const source = hex.toLowerCase();
+  let best: AccentId = "purple";
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const preset of ACCENT_PRESETS) {
+    const target = preset.hex.toLowerCase();
+    const distance =
+      (channel(source, 0) - channel(target, 0)) ** 2 +
+      (channel(source, 2) - channel(target, 2)) ** 2 +
+      (channel(source, 4) - channel(target, 4)) ** 2;
+    if (distance < bestDistance) {
+      best = preset.id;
+      bestDistance = distance;
+    }
   }
-  const chip = ACCENT_CHIPS.find((entry) => entry.id === uiAccent) ?? ACCENT_CHIPS[0];
-  return { id: chip.id, hex: chip.hex.toLowerCase() };
+  return best;
+}
+
+/** Preset id when the value is a known name; otherwise the nearest swatch. */
+export function markForAccent(uiAccent: string | null | undefined): AccentId {
+  if (uiAccent && LEGACY_ACCENT[uiAccent]) return LEGACY_ACCENT[uiAccent];
+  if (uiAccent && HEX_COLOR.test(uiAccent)) {
+    const exact = ACCENT_PRESETS.find((preset) => preset.hex.toLowerCase() === uiAccent.toLowerCase());
+    return exact?.id ?? nearestAccent(uiAccent);
+  }
+  return "purple";
+}
+
+/** Sidebar uses 32, the header wordmark uses 64. */
+export function markSrc(id: AccentId, slot: 32 | 64): string {
+  return `/brand/sxmlauncher-mark-${id}-${slot}.png`;
+}
+
+/**
+ * Named presets or a live `#rrggbb` from the color picker.
+ * Unknown names fall back to galactic purple.
+ */
+export function resolveAccent(uiAccent: string | null | undefined): ResolvedAccent {
+  const mark = markForAccent(uiAccent);
+  if (uiAccent && HEX_COLOR.test(uiAccent)) {
+    const exact = ACCENT_PRESETS.find((preset) => preset.hex.toLowerCase() === uiAccent.toLowerCase());
+    if (exact) return { id: exact.id, hex: exact.hex.toLowerCase(), mark: exact.id };
+    return { id: "custom", hex: uiAccent.toLowerCase(), mark };
+  }
+  const preset = ACCENT_PRESETS.find((entry) => entry.id === mark) ?? ACCENT_PRESETS[0];
+  return { id: preset.id, hex: preset.hex.toLowerCase(), mark: preset.id };
 }
 
 /** Paint theme, accent, density and motion onto `:root`. Safe to call often. */
@@ -100,6 +173,8 @@ export function applyAppearance(settings: AppearanceSlice): void {
   root.dataset.theme = normalizeTheme(settings.theme);
   root.dataset.density = settings.uiCompact ? "compact" : "comfortable";
   root.dataset.accent = accent.hex;
+  root.dataset.accentId = accent.mark;
+  useAccentMarkStore.getState().setMark(accent.mark);
   root.classList.add("dark");
   root.classList.toggle("no-animations", !settings.uiAnimations || settings.reduceMotion);
 

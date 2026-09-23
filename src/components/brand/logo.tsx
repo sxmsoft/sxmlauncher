@@ -1,24 +1,32 @@
 /**
- * Product mark. Every filled shape uses `var(--accent)`, so a theme change
- * tints the logo without swapping assets.
- *
- * `data-brand-slot="mark"` is the hook a later pass can use to drop in
- * per-color SVG variants. Until then the same paths follow `--accent`.
+ * Crystalline S mark. The file is chosen from the accent preset id
+ * (`purple`, `cyan`, `magenta`, `emerald`, `amber`, `silver`).
+ * Sidebar uses the 32px PNG; the header wordmark uses the 64px PNG.
  */
-export function BrandMark({ className }: { className?: string }) {
+
+import { markSrc, type AccentId } from "@/lib/appearance";
+import { cn } from "@/lib/utils";
+import { useAccentMarkStore } from "@/stores/accent";
+
+export function BrandMark({
+  slot = 32,
+  className,
+}: {
+  /** Asset slot. Sidebar is 32, header is 64. */
+  slot?: 32 | 64;
+  className?: string;
+}) {
+  const mark = useAccentMarkStore((state) => state.mark);
   return (
-    <svg
-      viewBox="0 0 32 32"
-      className={className}
-      aria-hidden
+    <img
+      src={markSrc(mark, slot)}
+      alt=""
+      width={slot}
+      height={slot}
+      draggable={false}
       data-brand-slot="mark"
-      data-accent-hook="var(--accent)"
-    >
-      <path
-        fill="var(--accent)"
-        d="M16 2.2 28.8 9.4v13.2L16 29.8 3.2 22.6V9.4L16 2.2Zm0 3.6L6.4 11v10l9.6 5.2L25.6 21V11L16 5.8Z"
-      />
-      <path fill="var(--accent)" d="M16 10.4 21.2 16 16 21.6 10.8 16 16 10.4Z" />
-    </svg>
+      data-accent-id={mark satisfies AccentId}
+      className={cn("pointer-events-none object-contain", className)}
+    />
   );
 }

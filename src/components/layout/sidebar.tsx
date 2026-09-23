@@ -60,7 +60,7 @@ export function Sidebar() {
       }}
     >
       <div className="mb-3 grid size-10 place-items-center" title="SXMLAUNCHER">
-        <BrandMark className="size-7" />
+        <BrandMark slot={32} className="size-8" />
       </div>
 
       {NAV.map((item) => (

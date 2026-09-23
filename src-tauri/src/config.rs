@@ -278,7 +278,7 @@ pub struct AppSettings {
     pub ui_background_opacity: f32,
     /// Gaussian blur (px) applied to the custom background.
     pub ui_background_blur: u32,
-    /// Accent hue key: `violet`, `purple`, `fuchsia`, `indigo`, `cyan`.
+    /// Swatch id: `purple`, `cyan`, `magenta`, `emerald`, `amber`, `silver`, or `#rrggbb`.
     pub ui_accent: String,
     /// Enable page/element animations.
     pub ui_animations: bool,
@@ -327,7 +327,7 @@ impl Default for AppSettings {
             lan_port: DEFAULT_LAN_PORT,
             lan_auto_detect: true,
             theme: "dark".to_string(),
-            accent: "violet".to_string(),
+            accent: "purple".to_string(),
             reduce_motion: false,
             minimize_to_tray_on_launch: false,
             close_to_tray: true,
@@ -335,7 +335,7 @@ impl Default for AppSettings {
             ui_background_path: None,
             ui_background_opacity: 0.35,
             ui_background_blur: 0,
-            ui_accent: "violet".to_string(),
+            ui_accent: "purple".to_string(),
             ui_animations: true,
             ui_compact: false,
             curseforge_api_key: None,
@@ -435,10 +435,8 @@ impl AppSettings {
         {
             self.ui_background_kind = "aurora".to_string();
         }
-        // Named chips, or a live `#rrggbb` from the accent picker.
-        if !ui_accent_allowed(&self.ui_accent) {
-            self.ui_accent = "violet".to_string();
-        }
+        // Six swatches, a legacy alias, or a live `#rrggbb` from the picker.
+        self.ui_accent = canonical_ui_accent(&self.ui_accent);
         self.ui_background_opacity = self.ui_background_opacity.clamp(0.0, 1.0);
         self.ui_background_blur = self.ui_background_blur.min(40);
         // 0 means "let the OS pick a free port for the beacon socket".
@@ -468,11 +466,17 @@ impl AppSettings {
     }
 }
 
-fn ui_accent_allowed(value: &str) -> bool {
-    matches!(
-        value,
-        "violet" | "purple" | "fuchsia" | "indigo" | "cyan" | "emerald"
-    ) || is_css_hex(value)
+fn canonical_ui_accent(value: &str) -> String {
+    match value {
+        "purple" | "violet" => "purple".to_string(),
+        "cyan" => "cyan".to_string(),
+        "magenta" | "fuchsia" => "magenta".to_string(),
+        "emerald" => "emerald".to_string(),
+        "amber" => "amber".to_string(),
+        "silver" => "silver".to_string(),
+        other if is_css_hex(other) => other.to_string(),
+        _ => "purple".to_string(),
+    }
 }
 
 fn is_css_hex(value: &str) -> bool {
@@ -567,7 +571,7 @@ mod tests {
         assert!(sanitized.elyby_redirect_uri.starts_with("http://"));
         // A custom background without a file falls back to the built-in aurora.
         assert_eq!(sanitized.ui_background_kind, "aurora");
-        assert_eq!(sanitized.ui_accent, "violet");
+        assert_eq!(sanitized.ui_accent, "purple");
         assert_eq!(sanitized.ui_background_opacity, 1.0);
         assert_eq!(sanitized.ui_background_blur, 40);
     }
@@ -579,6 +583,11 @@ mod tests {
         assert_eq!(settings.sanitized().ui_accent, "#7C5CfC");
 
         settings.ui_accent = "#abc".into();
-        assert_eq!(settings.sanitized().ui_accent, "violet");
+        assert_eq!(settings.sanitized().ui_accent, "purple");
+
+        settings.ui_accent = "fuchsia".into();
+        assert_eq!(settings.sanitized().ui_accent, "magenta");
+        settings.ui_accent = "violet".into();
+        assert_eq!(settings.sanitized().ui_accent, "purple");
     }
 }

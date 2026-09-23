@@ -110,7 +110,7 @@ export function LoginDialog({
               }}
             />
             <div className="relative">
-              <BrandMark className="size-10" />
+              <BrandMark slot={64} className="size-10" />
             </div>
             <div className="relative">
               <p className="text-lg font-semibold tracking-[0.12em]">SXMLAUNCHER</p>

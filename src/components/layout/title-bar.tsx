@@ -52,7 +52,7 @@ export function TitleBar() {
       }}
     >
       <div className="flex items-center gap-2 text-[15px] font-bold tracking-[0.08em] whitespace-nowrap">
-        <BrandMark className="size-5" />
+        <BrandMark slot={64} className="size-6" />
         SXM<span className="font-semibold text-[var(--accent)]">LAUNCHER</span>
       </div>
 
