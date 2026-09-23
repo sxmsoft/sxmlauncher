@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
 
+import { Link } from "react-router-dom";
+
+import { useTranslation } from "react-i18next";
+
 import { PageHeader } from "@/components/common/page-header";
 import { ModBrowser } from "@/components/mods/mod-browser";
 import { Badge } from "@/components/ui/badge";
@@ -16,6 +20,7 @@ import { useUiStore } from "@/stores/ui";
  * complete environment, not a set of files to merge.
  */
 export function ModpacksPage() {
+  const { t } = useTranslation();
   const instances = useInstances();
   const selectedId = useUiStore((state) => state.selectedInstanceId);
   const select = useUiStore((state) => state.selectInstance);
@@ -31,11 +36,14 @@ export function ModpacksPage() {
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        title="Packs"
-        description="Discover modpacks — one click creates an instance. Individual mods still install into the instance you pick."
+        title={t("browse.title")}
+        description={t("browse.subtitle")}
         actions={
           <div className="flex items-center gap-2">
-            <Badge variant="outline">target</Badge>
+            <Link to="/custom-packs" className="glass-pill px-3 py-1.5 text-xs font-medium text-[var(--text)]">
+              {t("browse.custom")}
+            </Link>
+            <Badge variant="outline">{t("browse.target")}</Badge>
             <Select
               value={targetId ?? ""}
               onChange={(event) => {
@@ -45,7 +53,7 @@ export function ModpacksPage() {
               }}
               className="w-56"
             >
-              <option value="">Choose an instance…</option>
+              <option value="">{t("browse.choose")}</option>
               {(instances.data ?? []).map((instance) => (
                 <option key={instance.id} value={instance.id}>
                   {instance.name} · {instance.gameVersion}

@@ -37,6 +37,12 @@ const SkinPage = lazy(async () => ({
 const SettingsPage = lazy(async () => ({
   default: (await import("@/pages/settings")).SettingsPage,
 }));
+const LibraryPage = lazy(async () => ({
+  default: (await import("@/pages/library")).LibraryPage,
+}));
+const ActivityPage = lazy(async () => ({
+  default: (await import("@/pages/activity")).ActivityPage,
+}));
 
 /**
  * Suspense boundary for a single route.
@@ -82,6 +88,22 @@ export function App() {
                 element={
                   <Page>
                     <DashboardPage />
+                  </Page>
+                }
+              />
+              <Route
+                path="library"
+                element={
+                  <Page>
+                    <LibraryPage />
+                  </Page>
+                }
+              />
+              <Route
+                path="activity"
+                element={
+                  <Page>
+                    <ActivityPage />
                   </Page>
                 }
               />

@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 
 import { Check, ExternalLink, KeyRound, ShieldCheck, UserPlus } from "lucide-react";
+import { useTranslation } from "react-i18next";
+
+import { BrandMark } from "@/components/brand/logo";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -90,68 +93,78 @@ export function LoginDialog({
     });
   };
 
+  const { t } = useTranslation();
   const waiting = pending != null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl">
+      <DialogContent className="w-[min(96vw,920px)] max-w-[920px] overflow-hidden p-0">
+        <div className="grid min-h-[520px] grid-cols-[220px_minmax(0,1fr)]">
+          <aside className="relative flex flex-col justify-between overflow-hidden border-r border-white/8 bg-[#121214] p-6">
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-0"
+              style={{
+                background:
+                  "radial-gradient(ellipse at 30% 20%, var(--accent-glow), transparent 60%), linear-gradient(180deg, #1a1a1e, #101012)",
+              }}
+            />
+            <div className="relative">
+              <BrandMark className="size-10" />
+            </div>
+            <div className="relative">
+              <p className="text-lg font-semibold tracking-[0.12em]">SXMLAUNCHER</p>
+              <p className="mt-2 text-sm leading-relaxed text-white/70">{t("login.aside")}</p>
+            </div>
+          </aside>
+
+          <div className="p-6">
         <DialogHeader>
-          <DialogTitle>Account gate</DialogTitle>
-          <DialogDescription>
-            Sign in to SXMLAUNCHER with Microsoft (browser or device code) or Ely.by
-            (password or browser). Skins show after sign-in. Secrets stay in the OS vault.
-          </DialogDescription>
+          <DialogTitle>{t("login.title")}</DialogTitle>
+          <DialogDescription>{t("login.body")}</DialogDescription>
         </DialogHeader>
 
         <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)}>
-          <TabsList>
-            <TabsTrigger value="microsoft">
-              <ShieldCheck /> Microsoft
+          <TabsList className="grid w-full grid-cols-3">
+            <TabsTrigger value="microsoft" className="justify-center">
+              <ShieldCheck /> {t("login.microsoft")}
             </TabsTrigger>
-            <TabsTrigger value="elyby">
-              <KeyRound /> Ely.by
+            <TabsTrigger value="elyby" className="justify-center">
+              <KeyRound /> {t("login.elyby")}
             </TabsTrigger>
-            <TabsTrigger value="offline">
-              <UserPlus /> Offline
+            <TabsTrigger value="offline" className="justify-center">
+              <UserPlus /> {t("login.offline")}
             </TabsTrigger>
           </TabsList>
 
           <TabsContent value="microsoft" className="flex flex-col gap-3">
-            <p className="text-muted-foreground text-xs leading-relaxed">
-              Opens the Microsoft “Sign in to Minecraft” page in your browser, then returns
-              here. Required for online multiplayer and Realms.
-            </p>
+            <p className="text-muted-foreground text-xs leading-relaxed">{t("login.microsoftBody")}</p>
             <Button
+              className="rounded-full"
               onClick={() => startBrowserFlow("microsoft")}
               loading={complete.isPending && tab === "microsoft"}
             >
-              <ExternalLink /> Continue in browser
+              <ExternalLink /> {t("login.continue")}
             </Button>
             {waiting && tab === "microsoft" ? (
-              <p className="text-muted-foreground text-xs">
-                Waiting for the browser to finish… you can close that tab once it says the
-                sign-in is complete.
-              </p>
+              <p className="text-muted-foreground text-xs">{t("login.waiting")}</p>
             ) : null}
             <DeviceCodeSection />
           </TabsContent>
 
           <TabsContent value="elyby" className="flex flex-col gap-4">
-            <p className="text-muted-foreground text-xs leading-relaxed">
-              Opens the Ely.by account page in your browser. Sign in and approve
-              SXMLAUNCHER there. Custom skins and capes are attached to the JVM
-              automatically.
-            </p>
+            <p className="text-muted-foreground text-xs leading-relaxed">{t("login.elyBody")}</p>
             <Button
               variant="outline"
+              className="rounded-full"
               onClick={() => startBrowserFlow("ely_by")}
               loading={complete.isPending && tab === "elyby"}
             >
-              <ExternalLink /> Sign in with Ely.by in the browser
+              <ExternalLink /> {t("login.elyBrowser")}
             </Button>
-            <Card className="flex flex-col gap-3 p-4">
-              <span className="text-xs font-medium">…or use your Ely.by password</span>
-              <Field label="Username" htmlFor="ely-user">
+            <Card className="flex flex-col gap-3 rounded-2xl p-4">
+              <span className="text-xs font-medium">{t("login.elyPassword")}</span>
+              <Field label={t("login.username")} htmlFor="ely-user">
                 <Input
                   id="ely-user"
                   value={elyUsername}
@@ -160,7 +173,7 @@ export function LoginDialog({
                   autoComplete="username"
                 />
               </Field>
-              <Field label="Password" htmlFor="ely-pass">
+              <Field label={t("login.password")} htmlFor="ely-pass">
                 <Input
                   id="ely-pass"
                   type="password"
@@ -180,20 +193,17 @@ export function LoginDialog({
                   )
                 }
               >
-                Sign in
+                {t("login.signIn")}
               </Button>
             </Card>
           </TabsContent>
 
           <TabsContent value="offline" className="flex flex-col gap-3">
-            <p className="text-muted-foreground text-xs leading-relaxed">
-              A local profile for singleplayer and LAN. The UUID is derived from the
-              nickname, so the same name always maps to the same player.
-            </p>
+            <p className="text-muted-foreground text-xs leading-relaxed">{t("login.offlineBody")}</p>
             <Field
-              label="Nickname"
+              label={t("login.nickname")}
               htmlFor="offline-name"
-              hint="3–16 characters: letters, numbers and underscores."
+              hint={t("login.nicknameHint")}
             >
               <Input
                 id="offline-name"
@@ -209,7 +219,7 @@ export function LoginDialog({
               loading={offline.isPending}
               onClick={() => offline.mutate(nickname.trim(), { onSuccess: onSignedIn })}
             >
-              <Check /> Create offline profile
+              <Check /> {t("login.createOffline")}
             </Button>
           </TabsContent>
         </Tabs>
@@ -217,6 +227,8 @@ export function LoginDialog({
         {error ? (
           <p className="text-[var(--destructive)] mt-4 text-xs leading-relaxed">{error}</p>
         ) : null}
+          </div>
+        </div>
       </DialogContent>
     </Dialog>
   );
@@ -230,6 +242,7 @@ function DeviceCodeSection() {
   const setError = useLoginStore((state) => state.setError);
   const setBusy = useLoginStore((state) => state.setBusy);
   const [starting, setStarting] = useState(false);
+  const { t } = useTranslation();
 
   const begin = async () => {
     setStarting(true);
@@ -263,21 +276,21 @@ function DeviceCodeSection() {
   if (!deviceCode) {
     return (
       <Button variant="ghost" size="sm" onClick={() => void begin()} loading={starting}>
-        Can't open a browser? Use a device code
+        {t("login.device")}
       </Button>
     );
   }
 
   return (
-    <Card className="flex flex-col gap-2 p-4">
+    <Card className="flex flex-col gap-2 rounded-2xl p-4">
       <span className="text-xs font-medium">
-        SXMLAUNCHER device code. Enter it at {deviceCode.verificationUri}
+        {t("login.deviceHint", { url: deviceCode.verificationUri })}
       </span>
       <Badge variant="primary" className="w-fit px-3 py-1 text-sm tracking-[0.2em]">
         {deviceCode.userCode}
       </Badge>
       <Button size="sm" onClick={() => void finish()} loading={busy}>
-        I've entered the code
+        {t("login.deviceDone")}
       </Button>
     </Card>
   );

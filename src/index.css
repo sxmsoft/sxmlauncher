@@ -5,28 +5,29 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * Nebula Vault — galactic deep purple, soft glass.
- * Brand accent lives on --accent. shadcn's `bg-accent` maps to --accent-dim
+ * SXMLAUNCHER — charcoal chrome, galactic purple accent.
+ * Surfaces stay neutral. --accent tints primary buttons, the active rail,
+ * focus rings, and the logo mark. shadcn's `bg-accent` maps to --accent-dim
  * so hover surfaces stay quiet.
  */
 :root,
 [data-theme="nebula"],
 [data-theme="custom"] {
-  --bg-void: #0b0614;
-  --surface-1: #160c24;
-  --surface-2: #1e1433;
-  --surface-3: #261b3f;
-  --surface-elevated: rgba(30, 20, 51, 0.72);
-  --border: rgba(167, 139, 250, 0.18);
-  --border-strong: rgba(167, 139, 250, 0.32);
-  --rim-light: rgba(167, 139, 250, 0.45);
+  --bg-void: #101012;
+  --surface-1: #161618;
+  --surface-2: #1c1c20;
+  --surface-3: #26262c;
+  --surface-elevated: rgba(22, 22, 24, 0.62);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --rim-light: rgba(167, 139, 250, 0.55);
   --accent: #8b5cf6;
-  --accent-soft: #a78bfa;
+  --accent-soft: #c4b5fd;
   --accent-dim: rgba(139, 92, 246, 0.22);
-  --accent-glow: rgba(139, 92, 246, 0.35);
-  --text: #f3e8ff;
-  --text-muted: #a89bb8;
-  --text-faint: #6b5f7a;
+  --accent-glow: rgba(139, 92, 246, 0.38);
+  --text: #f4f4f5;
+  --text-muted: #a1a1aa;
+  --text-faint: #71717a;
   --success: #34d399;
   --success-dim: rgba(52, 211, 153, 0.18);
   --warning: #fbbf24;
@@ -50,14 +51,14 @@
   --destructive-foreground: #fff7f7;
   --input: rgba(167, 139, 250, 0.22);
   --ring: rgba(139, 92, 246, 0.6);
-  --radius: 16px;
+  --radius: 20px;
 
   --blur-panel: 16px;
   --blur-strong: 20px;
   --opacity-panel: 0.72;
   --shadow-soft: 0 8px 32px rgba(0, 0, 0, 0.45);
   --shadow-glow: 0 0 48px var(--accent-glow);
-  --nav-rail: 76px;
+  --nav-rail: 72px;
   --topbar-h: 56px;
   --font-scale: 1;
   --font-ui: "Sora", "Outfit", system-ui, sans-serif;
@@ -176,7 +177,7 @@
 }
 
 [data-density="comfortable"] {
-  --nav-rail: 76px;
+  --nav-rail: 72px;
   --topbar-h: 56px;
   --font-scale: 1;
 }
@@ -287,11 +288,20 @@
   }
 }
 
-/* Void plus one soft accent glow — not a stacked gradient. */
+/* Charcoal field. Accent glow stays on controls, not the whole window. */
 @utility app-aurora {
   background:
-    radial-gradient(ellipse 55% 42% at 82% 0%, var(--accent-glow), transparent 62%),
+    radial-gradient(ellipse 40% 28% at 100% 0%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 70%),
     var(--bg-void);
+}
+
+@utility glass-pill {
+  background: color-mix(in srgb, white 8%, transparent);
+  border: 1px solid color-mix(in srgb, white 16%, transparent);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  border-radius: 999px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 
 @utility app-wallpaper {

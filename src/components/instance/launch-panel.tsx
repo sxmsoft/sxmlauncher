@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
 
-import { ChevronRight, Download, FolderOpen, Play, Settings, Square, Trash } from "lucide-react";
+import { Download, FolderOpen, Play, Settings, Square, Trash } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
+import { HeroBackdrop } from "@/components/home/hero-backdrop";
 import { HostPanel } from "@/components/instance/host-panel";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -16,18 +18,17 @@ import {
   useLaunchInstance,
   useRunningInstances,
 } from "@/hooks/queries";
-import { formatBytes, formatRelative, percent } from "@/lib/utils";
+import { translateActivityStatus } from "@/i18n/status";
+import { activityPresentation } from "@/lib/activity";
+import { formatBytes, formatRelative } from "@/lib/utils";
 import { revealPath } from "@/lib/window";
 import { useJobsStore } from "@/stores/jobs";
 import { isPlayable, STATUS_LABEL, type Instance } from "@/types/instance";
-import { STAGE_LABEL, type ProgressEvent } from "@/types/modpack";
+import type { ProgressEvent } from "@/types/modpack";
 
 /**
- * The one card a player actually uses.
- *
- * Left: what this instance is (version, loader, memory, mods, playtime).
- * Right: the primary action — install, play, stop — with the live progress of
- * whatever the backend is currently doing for it, then the host toggle.
+ * Home hero: blurred world, a large Play control, and version / configure pills.
+ * Progress appears only while a job is actually working.
  */
 export function LaunchPanel({
   instance,
@@ -38,6 +39,7 @@ export function LaunchPanel({
   onOpenSettings: () => void;
   onOpenDetail: () => void;
 }) {
+  const { t } = useTranslation();
   const jobs = useJobsStore((state) => state.jobs);
   const { data: running } = useRunningInstances();
 
@@ -53,8 +55,6 @@ export function LaunchPanel({
     [running, instance.id],
   );
 
-  // Only the job for this instance. A create-then-install used to paint the
-  // failure on whichever card was selected before.
   const job: ProgressEvent | null = useMemo(
     () =>
       jobs.find(
@@ -69,180 +69,172 @@ export function LaunchPanel({
     [jobs, instance.id],
   );
 
-  const busy = job != null && !job.finished && !job.error;
+  const view = job ? activityPresentation(job) : null;
+  const busy = view?.mode === "work";
   const installable = !isPlayable(instance);
   const mods = useInstanceMods(instance.id);
   const modRows = (mods.data ?? []).slice(0, 4);
   const ramGb = Math.max(1, Math.round(instance.memory.maxMb / 1024));
+  const loader = `${instance.loader.kind}${instance.loader.version ? ` ${instance.loader.version}` : ""}`;
 
   return (
-    <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
-      <Card className="relative min-h-[320px] overflow-hidden">
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-0"
-          style={{
-            background:
-              "radial-gradient(ellipse 70% 60% at 70% 18%, var(--accent-glow), transparent 55%), linear-gradient(160deg, var(--surface-2), var(--surface-1))",
-          }}
-        />
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-0"
-          style={{
-            background: "linear-gradient(180deg, transparent 18%, color-mix(in srgb, var(--bg-void) 88%, transparent) 100%)",
-          }}
-        />
-        <div className="relative flex h-full flex-col justify-end gap-4 p-7">
-          <div className="inline-flex w-fit items-center gap-1.5 rounded-full border border-[rgba(52,211,153,0.25)] bg-[var(--success-dim)] px-2.5 py-1 text-[11px] font-medium text-[var(--success)]">
-            <span className="size-1.5 rounded-full bg-[var(--success)] shadow-[0_0_8px_var(--success)]" />
-            {isRunning ? "Playing" : installable ? STATUS_LABEL[instance.status] : "Ready"}
-          </div>
-          <div>
-            <h2 className="text-[32px] leading-none font-bold tracking-[-0.03em]">{instance.name}</h2>
-            <p className="mt-2 max-w-md text-[13px] text-[var(--text-muted)]">
-              {instance.description || "Isolated instance — its own mods, configs, and worlds."}
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {isRunning ? (
-              <Button
-                variant="destructive"
-                size="lg"
-                className="h-[52px] min-w-44 rounded-xl px-7 text-[15px]"
-                onClick={() => kill.mutate(instance.id)}
-                loading={kill.isPending}
-              >
-                <Square /> Stop
-              </Button>
-            ) : installable ? (
-              <Button
-                size="lg"
-                className="h-[52px] min-w-44 rounded-xl px-7 text-[15px]"
-                onClick={() => install.mutate(instance.id)}
-                loading={install.isPending || busy}
-              >
-                <Download /> Install
-              </Button>
-            ) : (
-              <Button
-                variant="success"
-                size="lg"
-                className="h-[52px] min-w-44 rounded-xl px-7 text-[15px]"
-                onClick={() => launch.mutate({ id: instance.id })}
-                loading={launch.isPending || busy}
-              >
-                <Play className="fill-current" /> Play
-              </Button>
-            )}
-            <Button variant="outline" onClick={onOpenDetail}>
-              Mods <ChevronRight className="size-3.5" />
-            </Button>
-            <Button variant="outline" onClick={onOpenSettings}>
-              <Settings className="size-3.5" /> Settings
-            </Button>
-            <Hint label={instance.id}>
-              <Button variant="outline" onClick={() => void revealPath(instance.id)}>
-                <FolderOpen className="size-3.5" /> Open folder
-              </Button>
-            </Hint>
-            <Button
-              variant="ghost"
-              className="hover:text-[var(--destructive)]"
-              onClick={() => setConfirmRemove(true)}
-            >
-              <Trash className="size-3.5" /> Remove
-            </Button>
-          </div>
-          <div className="mt-2 flex flex-wrap gap-x-6 gap-y-3">
-            <Meta k="Version" v={instance.gameVersion} />
-            <Meta
-              k="Loader"
-              v={`${instance.loader.kind}${instance.loader.version ? ` ${instance.loader.version}` : ""}`}
-            />
-            <Meta k="RAM" v={`${ramGb} GB`} />
-            <Meta k="Java" v={String(instance.java.preferredMajor ?? instance.requiredJavaMajor)} />
-          </div>
-
-          {job ? (
-          <div className="flex flex-col gap-2 rounded-xl border border-[var(--border)] bg-[color-mix(in_srgb,var(--bg-void)_55%,transparent)] p-3">
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-sm font-medium">
-                {STAGE_LABEL[job.stage]} · {job.label}
-              </span>
-              <span className="text-muted-foreground text-xs tabular-nums">
-                {job.totalUnits > 0
-                  ? `${Math.round(percent(job.completedUnits, job.totalUnits))}%`
-                  : "working…"}
-              </span>
-            </div>
-            {job.totalUnits > 0 ? (
-              <Progress
-                value={percent(job.completedUnits, job.totalUnits)}
-                tone={job.error ? "destructive" : job.finished ? "success" : "primary"}
+    <div className="flex flex-col gap-4">
+      <div className="grid items-stretch gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
+        <section className="relative min-h-[460px] overflow-hidden rounded-[28px] border border-white/10 shadow-[0_24px_80px_rgba(0,0,0,0.45)]">
+          <HeroBackdrop />
+          <div className="relative flex min-h-[460px] flex-col justify-end gap-5 p-8">
+            <span className="glass-pill inline-flex w-fit items-center gap-2 px-3 py-1 text-[11px] font-medium text-white/90">
+              <span
+                className="size-1.5 rounded-full"
+                style={{
+                  background: isRunning ? "var(--success)" : "var(--accent)",
+                  boxShadow: "0 0 8px var(--accent)",
+                }}
               />
-            ) : (
-              <IndeterminateProgress />
-            )}
-            <div className="text-muted-foreground flex items-center justify-between gap-3 text-[11px]">
-              <span className="truncate">{job.currentItem ?? job.detail ?? "preparing"}</span>
-              {job.bytesPerSecond > 0 ? (
-                <span className="shrink-0 tabular-nums">{formatBytes(job.bytesPerSecond)}/s</span>
-              ) : null}
+              {isRunning ? t("home.playing") : installable ? STATUS_LABEL[instance.status] : t("home.ready")}
+            </span>
+            <div>
+              <h2 className="text-[40px] leading-none font-bold tracking-[-0.04em] text-white">
+                {instance.name}
+              </h2>
+              <p className="mt-3 max-w-lg text-sm text-white/70">
+                {instance.description || t("home.emptyBody")}
+              </p>
             </div>
-            {job.error ? (
-              <p className="text-[var(--destructive)] text-xs leading-relaxed">{job.error}</p>
+            <div className="flex flex-wrap items-center gap-3">
+              {isRunning ? (
+                <Button
+                  variant="destructive"
+                  className="h-14 min-w-[168px] rounded-2xl px-8 text-base tracking-[0.16em] uppercase"
+                  onClick={() => kill.mutate(instance.id)}
+                  loading={kill.isPending}
+                >
+                  <Square /> {t("home.stop")}
+                </Button>
+              ) : installable ? (
+                <Button
+                  className="h-14 min-w-[168px] rounded-2xl px-8 text-base tracking-[0.16em] uppercase"
+                  onClick={() => install.mutate(instance.id)}
+                  loading={install.isPending || busy}
+                >
+                  <Download /> {t("home.install")}
+                </Button>
+              ) : (
+                <Button
+                  className="h-14 min-w-[180px] rounded-2xl px-10 text-base tracking-[0.22em] uppercase"
+                  onClick={() => launch.mutate({ id: instance.id })}
+                  loading={launch.isPending || busy}
+                >
+                  <Play className="size-4" strokeWidth={1.75} /> {t("home.play")}
+                </Button>
+              )}
+              <button
+                type="button"
+                onClick={onOpenDetail}
+                className="glass-pill inline-flex h-12 items-center gap-2 px-4 text-sm font-medium text-white"
+              >
+                <span className="text-[11px] tracking-wide text-white/60 uppercase">{t("home.version")}</span>
+                <span className="font-mono">{instance.gameVersion}</span>
+              </button>
+              <button
+                type="button"
+                onClick={onOpenSettings}
+                className="glass-pill inline-flex h-12 items-center gap-2 px-4 text-sm font-medium text-white"
+              >
+                <Settings className="size-4" strokeWidth={1.5} />
+                {t("home.configure")}
+              </button>
+            </div>
+
+            {view && job ? (
+              <div className="glass-pill flex max-w-xl flex-col gap-2 rounded-2xl px-4 py-3 text-white">
+                <div className="flex items-center justify-between gap-3 text-sm">
+                  <span className={view.mode === "error" ? "text-[var(--danger)]" : ""}>
+                    {translateActivityStatus(view.status, t)} · {job.label}
+                  </span>
+                  {view.showProgress && view.progress != null ? (
+                    <span className="font-mono text-xs text-white/70">{Math.round(view.progress)}%</span>
+                  ) : null}
+                </div>
+                {view.showProgress ? (
+                  view.progress == null ? (
+                    <IndeterminateProgress />
+                  ) : (
+                    <Progress value={view.progress} tone={view.mode === "work" ? "primary" : "primary"} />
+                  )
+                ) : null}
+                {view.mode === "error" && job.error ? (
+                  <p className="text-xs text-[var(--danger)]">{job.error}</p>
+                ) : null}
+              </div>
             ) : null}
           </div>
-          ) : null}
+        </section>
+
+        <div className="flex flex-col gap-3.5">
+          <Card className="p-[18px]">
+            <h3 className="mb-3.5 flex items-center justify-between text-[13px] font-semibold">
+              {t("home.mods")}
+              <span className="font-mono text-[11px] font-medium text-[var(--text-muted)]">{instance.modCount}</span>
+            </h3>
+            {modRows.length === 0 ? (
+              <p className="text-xs text-[var(--text-muted)]">{t("home.noMods")}</p>
+            ) : (
+              modRows.map((mod) => (
+                <div
+                  key={mod.projectId}
+                  className="flex items-center gap-2.5 border-b border-white/8 py-2 last:border-b-0"
+                >
+                  <span
+                    className="size-7 shrink-0 rounded-[7px] border border-white/10"
+                    style={{ background: "linear-gradient(135deg, var(--surface-3), var(--accent-dim))" }}
+                  />
+                  <span className="min-w-0 flex-1 truncate text-xs font-medium">{mod.title || mod.fileName}</span>
+                  <span className="font-mono text-[10px] text-[var(--text-faint)]">{mod.enabled ? "on" : "off"}</span>
+                </div>
+              ))
+            )}
+            <Button variant="outline" size="sm" className="mt-3 w-full rounded-full" onClick={onOpenDetail}>
+              {t("home.viewAll")}
+            </Button>
+          </Card>
+
+          <Card className="p-[18px]">
+            <h3 className="mb-3.5 text-[13px] font-semibold">{t("home.resources")}</h3>
+            <div className="grid grid-cols-2 gap-2.5">
+              <StatTile k={t("home.allocated")} v={`${ramGb} GB`} />
+              <StatTile k={t("home.resolution")} v={`${instance.resolution.width}×${instance.resolution.height}`} />
+              <StatTile
+                k={t("home.lastPlayed")}
+                v={instance.lastPlayedAt ? formatRelative(instance.lastPlayedAt) : t("home.never")}
+              />
+              <StatTile k={t("home.size")} v={formatBytes(instance.sizeBytes)} />
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Hint label={instance.id}>
+                <Button variant="ghost" size="sm" onClick={() => void revealPath(instance.id)}>
+                  <FolderOpen className="size-3.5" /> {t("home.openFolder")}
+                </Button>
+              </Hint>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="hover:text-[var(--destructive)]"
+                onClick={() => setConfirmRemove(true)}
+              >
+                <Trash className="size-3.5" /> {t("home.remove")}
+              </Button>
+            </div>
+            <p className="mt-3 text-[11px] text-[var(--text-faint)]">
+              {t("home.loader")} · {loader} · {t("home.java")}{" "}
+              {instance.java.preferredMajor ?? instance.requiredJavaMajor}
+            </p>
+          </Card>
         </div>
-      </Card>
-
-      <div className="flex flex-col gap-3.5">
-        <Card className="p-[18px]">
-          <h3 className="mb-3.5 flex items-center justify-between text-[13px] font-semibold">
-            Mods
-            <span className="font-mono text-[11px] font-medium text-[var(--text-muted)]">{instance.modCount}</span>
-          </h3>
-          {modRows.length === 0 ? (
-            <p className="text-xs text-[var(--text-muted)]">No mods installed yet.</p>
-          ) : (
-            modRows.map((mod) => (
-              <div key={mod.projectId} className="flex items-center gap-2.5 border-b border-[var(--border)] py-2 last:border-b-0">
-                <span
-                  className="size-7 shrink-0 rounded-[7px] border border-[var(--border)]"
-                  style={{ background: "linear-gradient(135deg, var(--surface-3), var(--accent-dim))" }}
-                />
-                <span className="min-w-0 flex-1 truncate text-xs font-medium">{mod.title || mod.fileName}</span>
-                <span className="font-mono text-[10px] text-[var(--text-faint)]">
-                  {mod.enabled ? "on" : "off"}
-                </span>
-              </div>
-            ))
-          )}
-          <Button variant="outline" size="sm" className="mt-3 w-full" onClick={onOpenDetail}>
-            View all
-          </Button>
-        </Card>
-
-        <Card className="p-[18px]">
-          <h3 className="mb-3.5 text-[13px] font-semibold">Resources</h3>
-          <div className="grid grid-cols-2 gap-2.5">
-            <StatTile k="Allocated" v={`${ramGb} GB`} />
-            <StatTile
-              k="Resolution"
-              v={`${instance.resolution.width}×${instance.resolution.height}`}
-            />
-            <StatTile k="Last played" v={instance.lastPlayedAt ? formatRelative(instance.lastPlayedAt) : "Never"} />
-            <StatTile k="Size" v={formatBytes(instance.sizeBytes)} />
-          </div>
-        </Card>
       </div>
 
-      <Card className="p-4 xl:col-span-2">
-        <p className="mb-3 text-xs leading-relaxed text-[var(--text-muted)]">
-          LAN host for this instance stays here. The global P2P directory is paused on the Host screen.
-        </p>
+      <Card className="p-4">
+        <p className="mb-3 text-xs leading-relaxed text-[var(--text-muted)]">{t("home.hostNote")}</p>
         <HostPanel instance={instance} />
       </Card>
 
@@ -265,18 +257,9 @@ export function LaunchPanel({
   );
 }
 
-function Meta({ k, v }: { k: string; v: string }) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-[10px] tracking-[0.08em] text-[var(--text-faint)] uppercase">{k}</span>
-      <span className="font-mono text-[13px] capitalize">{v}</span>
-    </div>
-  );
-}
-
 function StatTile({ k, v }: { k: string; v: string }) {
   return (
-    <div className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-2)] p-3">
+    <div className="rounded-2xl border border-white/8 bg-black/20 p-3">
       <div className="text-[10px] tracking-[0.06em] text-[var(--text-faint)] uppercase">{k}</div>
       <div className="mt-1 font-mono text-sm font-semibold text-[var(--accent-soft)]">{v}</div>
     </div>

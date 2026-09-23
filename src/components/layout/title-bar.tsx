@@ -3,7 +3,9 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { Activity, ArrowUpCircle, Minus, Search, Square, Wifi, WifiOff, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
+import { BrandMark } from "@/components/brand/logo";
 import { AccountMenu } from "@/components/account/account-menu";
 import { AccountAvatar } from "@/components/account/account-avatar";
 import { Badge } from "@/components/ui/badge";
@@ -37,6 +39,7 @@ export function TitleBar() {
     void isWindowMaximized().then(setMaximized);
   }, []);
 
+  const { t } = useTranslation();
   const connected = status?.directoryConnected ?? false;
 
   return (
@@ -48,18 +51,19 @@ export function TitleBar() {
         backdropFilter: "blur(var(--blur-panel))",
       }}
     >
-      <div className="text-[15px] font-bold tracking-[0.08em] whitespace-nowrap">
-        SXM<span className="font-semibold text-[var(--accent-soft)]">LAUNCHER</span>
+      <div className="flex items-center gap-2 text-[15px] font-bold tracking-[0.08em] whitespace-nowrap">
+        <BrandMark className="size-5" />
+        SXM<span className="font-semibold text-[var(--accent)]">LAUNCHER</span>
       </div>
 
-      <label className="no-drag ml-2 flex h-9 max-w-[360px] flex-1 items-center gap-2.5 rounded-[10px] border border-[var(--border)] bg-[var(--surface-2)] px-3.5 text-[var(--text-muted)] focus-within:border-[var(--border-strong)] focus-within:shadow-[0_0_0_3px_var(--accent-dim)]">
-        <Search className="size-4 shrink-0" strokeWidth={1.75} aria-hidden />
+      <label className="glass-pill no-drag ml-2 flex h-9 max-w-[360px] flex-1 items-center gap-2.5 px-3.5 text-[var(--text-muted)] focus-within:shadow-[0_0_0_3px_var(--accent-dim)]">
+        <Search className="size-4 shrink-0" strokeWidth={1.5} aria-hidden />
         <input
           type="search"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search instances…"
-          aria-label="Search instances"
+          placeholder={t("chrome.search")}
+          aria-label={t("chrome.searchLabel")}
           className="min-w-0 flex-1 bg-transparent text-[13px] text-[var(--text)] outline-none placeholder:text-[var(--text-faint)]"
         />
         <kbd className="hidden rounded border border-[var(--border)] bg-[var(--surface-3)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-faint)] sm:inline">
@@ -68,7 +72,7 @@ export function TitleBar() {
       </label>
 
       <div className="no-drag ml-auto flex items-center gap-2">
-        {BROWSER_MODE ? <Badge variant="warning">preview</Badge> : null}
+        {BROWSER_MODE ? <Badge variant="warning">{t("chrome.preview")}</Badge> : null}
         {update?.updateAvailable ? (
           <Hint label={`Version ${update.version} is available`}>
             <button
@@ -81,7 +85,7 @@ export function TitleBar() {
             >
               <Badge variant="primary">
                 <ArrowUpCircle className="size-3" />
-                update
+                {t("chrome.update")}
               </Badge>
             </button>
           </Hint>
@@ -96,13 +100,13 @@ export function TitleBar() {
         >
           <Badge variant={connected ? "outline" : "warning"}>
             {connected ? <Wifi className="size-3" /> : <WifiOff className="size-3" />}
-            {connected ? `${status?.onlinePlayers ?? 0} online` : "offline"}
+            {connected ? t("chrome.online", { count: status?.onlinePlayers ?? 0 }) : t("chrome.offline")}
           </Badge>
         </Hint>
 
         <button
           type="button"
-          title="Activity"
+          title={t("chrome.activity")}
           onClick={() => setActivityOpen(true)}
           className="relative grid size-9 place-items-center rounded-[10px] text-[var(--text-muted)] hover:border hover:border-[var(--border)] hover:bg-[var(--accent-dim)] hover:text-[var(--text)]"
         >
@@ -112,14 +116,14 @@ export function TitleBar() {
               {activeJobCount}
             </span>
           ) : null}
-          <span className="sr-only">Activity</span>
+          <span className="sr-only">{t("chrome.activity")}</span>
         </button>
 
         <AccountMenu>
           <button
             type="button"
             className="grid size-9 place-items-center overflow-hidden rounded-[10px] border border-[var(--border-strong)] bg-[var(--surface-3)] shadow-[0_0_0_2px_var(--accent-dim)]"
-            aria-label="Profile"
+            aria-label={t("chrome.profile")}
           >
             {account.data ? (
               <AccountAvatar account={account.data} size={36} />
@@ -132,7 +136,7 @@ export function TitleBar() {
         <div className="ml-1 flex items-center gap-0.5">
           <Button variant="ghost" size="icon-sm" onClick={() => void minimizeWindow()}>
             <Minus className="size-3.5" />
-            <span className="sr-only">Minimize</span>
+            <span className="sr-only">{t("chrome.minimize")}</span>
           </Button>
           <Button
             variant="ghost"
@@ -143,7 +147,7 @@ export function TitleBar() {
             }}
           >
             <Square className={cn("size-3", maximized && "opacity-60")} />
-            <span className="sr-only">Maximize</span>
+            <span className="sr-only">{t("chrome.maximize")}</span>
           </Button>
           <Button
             variant="ghost"
@@ -152,7 +156,7 @@ export function TitleBar() {
             onClick={() => void closeWindow()}
           >
             <X className="size-3.5" />
-            <span className="sr-only">Close</span>
+            <span className="sr-only">{t("chrome.close")}</span>
           </Button>
         </div>
       </div>

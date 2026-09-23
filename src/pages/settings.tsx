@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
+import { useTranslation } from "react-i18next";
+
 import {
   Bug,
   Cog,
@@ -67,16 +69,16 @@ function withAppearance(base: AppSettings, appearance: AppSettings): AppSettings
   };
 }
 
-const SECTIONS: Array<{ id: SettingsSection; label: string; icon: typeof Cog }> = [
-  { id: "general", label: "General", icon: Cog },
-  { id: "appearance", label: "Appearance", icon: Palette },
-  { id: "downloads", label: "Downloads", icon: HardDrive },
-  { id: "defaults", label: "Game defaults", icon: Cpu },
-  { id: "network", label: "Network & hosting", icon: Globe },
-  { id: "accounts", label: "Accounts & vault", icon: KeyRound },
-  { id: "storage", label: "Storage", icon: FolderOpen },
-  { id: "updates", label: "Updates", icon: RefreshCw },
-  { id: "diagnostics", label: "Diagnostics", icon: Bug },
+const SECTIONS: Array<{ id: SettingsSection; labelKey: string; icon: typeof Cog }> = [
+  { id: "general", labelKey: "settings.sections.general", icon: Cog },
+  { id: "appearance", labelKey: "settings.sections.appearance", icon: Palette },
+  { id: "downloads", labelKey: "settings.sections.downloads", icon: HardDrive },
+  { id: "defaults", labelKey: "settings.sections.defaults", icon: Cpu },
+  { id: "network", labelKey: "settings.sections.network", icon: Globe },
+  { id: "accounts", labelKey: "settings.sections.accounts", icon: KeyRound },
+  { id: "storage", labelKey: "settings.sections.storage", icon: FolderOpen },
+  { id: "updates", labelKey: "settings.sections.updates", icon: RefreshCw },
+  { id: "diagnostics", labelKey: "settings.sections.diagnostics", icon: Bug },
 ];
 
 /**
@@ -89,6 +91,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string; icon: typeof Cog }> 
  * holding half of a configuration.
  */
 export function SettingsPage() {
+  const { t } = useTranslation();
   const { data: settings, isLoading } = useSettings();
   const save = useSaveSettings();
   const section = useUiStore((state) => state.settingsSection);
@@ -140,18 +143,19 @@ export function SettingsPage() {
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        title="Settings"
-        description="Everything is stored locally. Only the server directory URL touches the network."
+        title={t("settings.title")}
+        description={t("settings.subtitle")}
         actions={
           <>
-            {dirty ? <Badge variant="warning">unsaved changes</Badge> : null}
+            {dirty ? <Badge variant="warning">{t("settings.unsaved")}</Badge> : null}
             <Button
               size="sm"
+              className="rounded-full"
               disabled={!dirty}
               loading={save.isPending}
               onClick={() => draft && save.mutate(draft)}
             >
-              <Save className="size-4" /> Save settings
+              <Save className="size-4" /> {t("settings.save")}
             </Button>
           </>
         }
@@ -172,7 +176,7 @@ export function SettingsPage() {
               }
             >
               <entry.icon className="size-4" />
-              {entry.label}
+              {t(entry.labelKey)}
             </button>
           ))}
         </nav>

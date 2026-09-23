@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 
 import { Gauge, Globe, Radio, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { StatusDot } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { IndeterminateProgress, Progress } from "@/components/ui/progress";
 import { useNetworkStatus, useRunningInstances } from "@/hooks/queries";
+import { translateActivityStatus } from "@/i18n/status";
 import { activityPresentation } from "@/lib/activity";
 import { cn, formatBytes } from "@/lib/utils";
 import { aggregateProgress, useJobsStore } from "@/stores/jobs";
@@ -47,6 +49,8 @@ export function StatusStrip() {
   const downloadLike = view?.mode === "work" && (current?.bytesPerSecond ?? 0) > 0;
   const isActive = current != null && !current.finished && !current.error && view?.mode === "work";
   const isCancelling = current != null && cancelling.includes(current.jobId);
+  const { t } = useTranslation();
+  const statusLine = view ? translateActivityStatus(view.status, t) : "";
 
   return (
     <footer className="flex h-8 shrink-0 items-center gap-3 border-t border-[var(--border)] bg-[color-mix(in_srgb,var(--surface-1)_80%,transparent)] px-3 font-mono text-[11px]">
@@ -60,7 +64,7 @@ export function StatusStrip() {
             <StatusDot tone="primary" pulse />
           )}
           <span className="truncate font-medium">
-            {isCancelling ? "Stopping" : `${view?.status ?? ""} · ${current.label}`}
+            {isCancelling ? t("strip.stopping") : `${statusLine} · ${current.label}`}
           </span>
           <span className="text-muted-foreground hidden truncate sm:inline">
             {current.currentItem ?? current.detail ?? ""}
@@ -84,7 +88,7 @@ export function StatusStrip() {
 
           {active.length > 1 ? (
             <span className="text-muted-foreground shrink-0">
-              +{active.length - 1} more
+              {t("strip.more", { count: active.length - 1 })}
             </span>
           ) : null}
 
@@ -105,7 +109,7 @@ export function StatusStrip() {
               disabled={isCancelling}
             >
               <X className="size-3" />
-              <span className="sr-only">Stop this download</span>
+              <span className="sr-only">{t("strip.stop")}</span>
             </Button>
           ) : (
             <Button
@@ -115,29 +119,31 @@ export function StatusStrip() {
               onClick={() => dismiss(current.jobId)}
             >
               <X className="size-3" />
-              <span className="sr-only">Dismiss progress</span>
+              <span className="sr-only">{t("strip.dismiss")}</span>
             </Button>
           )}
         </div>
       ) : (
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <StatusDot tone="muted" />
-          <span className="text-muted-foreground">idle</span>
+          <span className="text-muted-foreground">{t("strip.idle")}</span>
         </div>
       )}
 
       <div className="flex shrink-0 items-center gap-3">
         <span className="text-muted-foreground flex items-center gap-1.5">
           <Radio className="size-3" />
-          {hosts} hosting · {guests} joined
+          {t("strip.sessions", { hosts, guests })}
         </span>
         <span className={cn("flex items-center gap-1.5", running && running.length > 0 ? "text-[var(--success)]" : "text-muted-foreground")}>
           <Gauge className="size-3" />
-          {running?.length ?? 0} running
+          {t("strip.running", { count: running?.length ?? 0 })}
         </span>
         <span className="text-muted-foreground flex items-center gap-1.5">
           <Globe className="size-3" />
-          {status?.directoryConnected ? `${status.onlinePlayers} online` : `LAN · ${status?.lanWorlds ?? 0} nearby`}
+          {status?.directoryConnected
+            ? t("strip.online", { count: status.onlinePlayers })
+            : t("strip.lan", { count: status?.lanWorlds ?? 0 })}
         </span>
       </div>
     </footer>

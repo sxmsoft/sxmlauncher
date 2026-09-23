@@ -60,7 +60,7 @@ export interface AppSettings {
   uiBackgroundOpacity: number;
   /** Gaussian blur (px) applied to the custom background. */
   uiBackgroundBlur: number;
-  /** Accent hue key: violet | purple | fuchsia | indigo | cyan | emerald. */
+  /** Accent chip id, or a live `#rrggbb` from the color picker. */
   uiAccent: string;
   uiAnimations: boolean;
   uiCompact: boolean;

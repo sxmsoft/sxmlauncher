@@ -3,6 +3,7 @@ import { useRef, useState, type DragEvent } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { CheckCircle2, ExternalLink, LogOut, Palette, RefreshCw, Settings, Shrink, Upload, UserPlus } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { AccountAvatar } from "@/components/account/account-avatar";
 import { LoginDialog } from "@/components/account/login-dialog";
@@ -36,6 +37,7 @@ import type { AccountSummary, SkinModel, SkinUploadOutcome } from "@/types/accou
  * render, model, cape — and switching which profile you play as.
  */
 export function SkinPage() {
+  const { t } = useTranslation();
   const accounts = useAccounts();
   const active = useActiveAccount();
   const setActive = useSetActiveAccount();
@@ -248,24 +250,25 @@ export function SkinPage() {
         </div>
       ) : null}
       <PageHeader
-        title="Profile"
-        description="Skin, account, and shortcuts."
+        title={t("profile.title")}
+        description={t("profile.subtitle")}
         actions={
           <div className="flex items-center gap-2">
             {canRefreshSkin ? (
               <Button
                 size="sm"
                 variant="secondary"
+                className="rounded-full"
                 loading={refreshSkin.isPending}
                 onClick={() => {
                   if (shown) refreshSkin.mutate(shown.id);
                 }}
               >
-                <RefreshCw className="size-4" /> Refresh skin
+                <RefreshCw className="size-4" /> {t("profile.refresh")}
               </Button>
             ) : null}
-            <Button size="sm" onClick={() => setLoginOpen(true)}>
-              <UserPlus className="size-4" /> Add account
+            <Button size="sm" className="rounded-full" onClick={() => setLoginOpen(true)}>
+              <UserPlus className="size-4" /> {t("profile.add")}
             </Button>
           </div>
         }
@@ -279,22 +282,22 @@ export function SkinPage() {
       ) : !shown ? (
         <EmptyState
           icon={<Palette />}
-          title="No profile to preview"
-          description="Sign in with Microsoft or Ely.by for skins and capes, or create an offline profile to get started."
+          title={t("profile.emptyTitle")}
+          description={t("profile.emptyBody")}
           action={
             <Button onClick={() => setLoginOpen(true)}>
-              <UserPlus /> Add an account
+              <UserPlus /> {t("profile.addAction")}
             </Button>
           }
         />
       ) : (
-        <div className="grid items-start gap-5 lg:grid-cols-[300px_minmax(0,1fr)]">
+        <div className="grid items-start gap-5 lg:grid-cols-[320px_minmax(0,1fr)]">
           <div className="flex flex-col gap-5">
             <div
               className={cn(
-                "rounded-xl transition-shadow",
+                "rounded-[28px] border border-white/10 bg-black/25 p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-shadow",
                 dropping &&
-                  "ring-2 ring-[color-mix(in_oklab,var(--primary)_55%,transparent)] ring-offset-2 ring-offset-[var(--background)]",
+                  "ring-2 ring-[color-mix(in_oklab,var(--accent)_55%,transparent)] ring-offset-2 ring-offset-[var(--background)]",
               )}
             >
               <SkinPreview account={shown} />
@@ -429,11 +432,11 @@ export function SkinPage() {
               </div>
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-semibold">
-                  {shown.provider === "microsoft" ? "Microsoft account connected" : PROVIDER_LABEL[shown.provider]}
+                  {shown.provider === "microsoft" ? t("profile.connected") : PROVIDER_LABEL[shown.provider]}
                 </div>
                 <div className="mt-0.5 truncate text-xs text-[var(--text-muted)]">{shown.username}</div>
               </div>
-              {shown.id === active.data?.id ? <Badge variant="success">Active</Badge> : <Badge variant="outline">Preview</Badge>}
+              {shown.id === active.data?.id ? <Badge variant="success">{t("profile.active")}</Badge> : <Badge variant="outline">{t("profile.previewing")}</Badge>}
             </Card>
 
             <div className="grid grid-cols-2 gap-2.5">

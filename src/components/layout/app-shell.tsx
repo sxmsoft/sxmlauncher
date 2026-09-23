@@ -30,11 +30,6 @@ export function AppShell() {
     <TooltipProvider delayDuration={200} skipDelayDuration={300}>
       <div className="app-aurora relative flex h-full overflow-hidden">
         <div className="app-wallpaper" aria-hidden />
-        <div
-          aria-hidden
-          className="pointer-events-none absolute top-20 right-[12%] z-0 size-[420px] rounded-full opacity-45 blur-[40px]"
-          style={{ background: "radial-gradient(circle, var(--accent-glow), transparent 70%)" }}
-        />
         <div className="relative z-10 flex min-h-0 min-w-0 flex-1">
           <Sidebar />
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">

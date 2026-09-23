@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 
 import { Globe, Link2, Radio, RefreshCw, Star } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { PageHeader } from "@/components/common/page-header";
 import { JoinCodeDialog } from "@/components/servers/join-code-dialog";
@@ -38,6 +39,7 @@ import {
  * survive a restart even when the directory does not.
  */
 export function ServersPage() {
+  const { t } = useTranslation();
   const [filter, setFilter] = useState<ServerFilter>({ limit: 60 });
   const [joinOpen, setJoinOpen] = useState(false);
   const [pinged, setPinged] = useState<Record<string, number | null>>({});
@@ -108,15 +110,15 @@ export function ServersPage() {
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        title="Host"
-        description="Share a world with friends — P2P directory, LAN, or a join code."
+        title={t("host.title")}
+        description={t("host.subtitle")}
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => void browse.refetch()} loading={browse.isFetching}>
-              <RefreshCw className="size-4" /> Refresh
+            <Button variant="outline" size="sm" className="rounded-full" onClick={() => void browse.refetch()} loading={browse.isFetching}>
+              <RefreshCw className="size-4" /> {t("host.refresh")}
             </Button>
-            <Button size="sm" onClick={() => setJoinOpen(true)}>
-              <Link2 className="size-4" /> Join with code
+            <Button size="sm" className="rounded-full" onClick={() => setJoinOpen(true)}>
+              <Link2 className="size-4" /> {t("host.join")}
             </Button>
           </>
         }
@@ -126,26 +128,23 @@ export function ServersPage() {
         <div className="mb-5 grid size-[72px] place-items-center rounded-[20px] border border-[var(--border)] bg-[var(--surface-2)] shadow-[0_0_40px_var(--accent-dim)]">
           <Radio className="size-8 text-[var(--accent-soft)]" strokeWidth={1.5} />
         </div>
-        <h2 className="text-xl font-semibold">Host coming soon</h2>
-        <p className="mt-2 max-w-sm text-[13px] text-[var(--text-muted)]">
-          Global P2P is paused in this build. The screen stays here so it does not look broken —
-          LAN worlds and join codes still work.
-        </p>
+        <h2 className="text-xl font-semibold">{t("host.soon")}</h2>
+        <p className="mt-2 max-w-sm text-[13px] text-[var(--text-muted)]">{t("host.soonBody")}</p>
         <div className="mt-4 mb-6 inline-flex items-center gap-2 rounded-full border border-[rgba(251,191,36,0.25)] bg-[rgba(251,191,36,0.1)] px-3.5 py-2 text-xs font-medium text-[var(--warning)]">
           <span className="size-1.5 rounded-full bg-[var(--warning)]" />
-          P2P is paused · UI shell is active
+          {t("host.paused")}
         </div>
         <div className="grid w-full max-w-xl grid-cols-3 gap-3 opacity-50">
           <div className="rounded-[var(--radius-md)] border border-dashed border-[var(--border)] bg-[var(--surface-2)] p-4 text-left">
-            <div className="text-[11px] text-[var(--text-faint)]">Status</div>
-            <div className="mt-1 text-[13px] font-medium text-[var(--text-muted)]">Offline</div>
+            <div className="text-[11px] text-[var(--text-faint)]">{t("host.status")}</div>
+            <div className="mt-1 text-[13px] font-medium text-[var(--text-muted)]">{t("host.offline")}</div>
           </div>
           <div className="rounded-[var(--radius-md)] border border-dashed border-[var(--border)] bg-[var(--surface-2)] p-4 text-left">
-            <div className="text-[11px] text-[var(--text-faint)]">Players</div>
+            <div className="text-[11px] text-[var(--text-faint)]">{t("host.players")}</div>
             <div className="mt-1 text-[13px] font-medium text-[var(--text-muted)]">— / 8</div>
           </div>
           <div className="rounded-[var(--radius-md)] border border-dashed border-[var(--border)] bg-[var(--surface-2)] p-4 text-left">
-            <div className="text-[11px] text-[var(--text-faint)]">Directory</div>
+            <div className="text-[11px] text-[var(--text-faint)]">{t("host.directory")}</div>
             <div className="mt-1 text-[13px] font-medium text-[var(--text-muted)]">Paused</div>
           </div>
         </div>

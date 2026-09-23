@@ -1,16 +1,19 @@
 import { useState } from "react";
 
 import { Image as ImageIcon, Video, Zap } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, SettingRow } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { writeLocale, type AppLocale } from "@/i18n";
 import {
   ACCENT_CHIPS,
   normalizeTheme,
   readFontScale,
+  resolveAccent,
   THEME_PRESETS,
   writeFontScale,
 } from "@/lib/appearance";
@@ -59,6 +62,9 @@ export function AppearanceSection({
       : "aurora"
   ) as "aurora" | "image" | "video";
   const [fontPct, setFontPct] = useState(() => Math.round((readFontScale() ?? 1) * 100));
+  const { t, i18n } = useTranslation();
+  const locale: AppLocale = i18n.resolvedLanguage === "en" ? "en" : "tr";
+  const accent = resolveAccent(draft.uiAccent);
 
   const onPickBackground = async (mode: "image" | "video") => {
     try {
@@ -74,12 +80,41 @@ export function AppearanceSection({
     <>
       <Card>
         <CardHeader>
-          <CardTitle>Theme presets</CardTitle>
+          <CardTitle>{t("settings.language")}</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
-          <p className="text-xs leading-relaxed text-[var(--text-muted)]">
-            Nebula Vault is the default. Accent chips still tint highlights on every preset.
-          </p>
+          <p className="text-xs leading-relaxed text-[var(--text-muted)]">{t("settings.languageHint")}</p>
+          <div className="grid grid-cols-2 gap-2">
+            {(
+              [
+                ["tr", t("settings.turkish")],
+                ["en", t("settings.english")],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => writeLocale(id)}
+                className={cn(
+                  "rounded-full border px-3 py-2.5 text-sm font-medium",
+                  locale === id
+                    ? "border-transparent bg-[var(--accent)] text-white"
+                    : "border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-muted)]",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("settings.theme")}</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <p className="text-xs leading-relaxed text-[var(--text-muted)]">{t("settings.themeHint")}</p>
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
             {THEME_PRESETS.map((preset) => {
               const selected = theme === preset.id;
@@ -111,12 +146,13 @@ export function AppearanceSection({
 
       <Card>
         <CardHeader>
-          <CardTitle>Accent</CardTitle>
+          <CardTitle>{t("settings.accent")}</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-3">
+          <p className="text-xs leading-relaxed text-[var(--text-muted)]">{t("settings.accentHint")}</p>
           <div className="flex flex-wrap items-center gap-3">
             {ACCENT_CHIPS.map((chip) => {
-              const selected = draft.uiAccent === chip.id;
+              const selected = accent.id === chip.id;
               return (
                 <button
                   key={chip.id}
@@ -132,6 +168,16 @@ export function AppearanceSection({
                 />
               );
             })}
+            <label className="glass-pill inline-flex h-9 items-center gap-2 px-3 text-xs font-medium text-[var(--text-muted)]">
+              <input
+                type="color"
+                aria-label={t("settings.customAccent")}
+                value={accent.hex}
+                onChange={(event) => onChange({ uiAccent: event.target.value, accent: event.target.value })}
+                className="size-5 cursor-pointer border-0 bg-transparent p-0"
+              />
+              {t("settings.customAccent")}
+            </label>
           </div>
         </CardContent>
       </Card>

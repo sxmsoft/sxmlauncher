@@ -435,9 +435,8 @@ impl AppSettings {
         {
             self.ui_background_kind = "aurora".to_string();
         }
-        if !["violet", "purple", "fuchsia", "indigo", "cyan", "emerald"]
-            .contains(&self.ui_accent.as_str())
-        {
+        // Named chips, or a live `#rrggbb` from the accent picker.
+        if !ui_accent_allowed(&self.ui_accent) {
             self.ui_accent = "violet".to_string();
         }
         self.ui_background_opacity = self.ui_background_opacity.clamp(0.0, 1.0);
@@ -467,6 +466,20 @@ impl AppSettings {
         let serialized = serde_json::to_string_pretty(self)?;
         write_atomic(&paths.settings_file, serialized.as_bytes())
     }
+}
+
+fn ui_accent_allowed(value: &str) -> bool {
+    matches!(
+        value,
+        "violet" | "purple" | "fuchsia" | "indigo" | "cyan" | "emerald"
+    ) || is_css_hex(value)
+}
+
+fn is_css_hex(value: &str) -> bool {
+    let Some(rest) = value.strip_prefix('#') else {
+        return false;
+    };
+    rest.len() == 6 && rest.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 /// Write a file via a temporary sibling then rename, so a crash mid-write can
@@ -557,5 +570,15 @@ mod tests {
         assert_eq!(sanitized.ui_accent, "violet");
         assert_eq!(sanitized.ui_background_opacity, 1.0);
         assert_eq!(sanitized.ui_background_blur, 40);
+    }
+
+    #[test]
+    fn sanitizer_keeps_a_custom_accent_hex() {
+        let mut settings = AppSettings::default();
+        settings.ui_accent = "#7C5CfC".into();
+        assert_eq!(settings.sanitized().ui_accent, "#7C5CfC");
+
+        settings.ui_accent = "#abc".into();
+        assert_eq!(settings.sanitized().ui_accent, "violet");
     }
 }

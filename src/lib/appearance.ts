@@ -8,12 +8,12 @@
 import type { AppSettings } from "@/types/system";
 
 export const THEME_PRESETS = [
-  { id: "nebula", label: "Nebula", hint: "Galactic deep purple", colors: ["#0B0614", "#160C24", "#8B5CF6"] },
+  { id: "nebula", label: "Nebula", hint: "Charcoal, galactic purple", colors: ["#101012", "#1C1C20", "#8B5CF6"] },
   { id: "obsidian", label: "Obsidian", hint: "Charcoal and zinc", colors: ["#08080A", "#1A1A1E", "#A1A1AA"] },
   { id: "aurora", label: "Aurora", hint: "Emerald and teal", colors: ["#041210", "#0F2A26", "#10B981"] },
   { id: "ember", label: "Ember", hint: "Warm amber", colors: ["#120808", "#261412", "#F97316"] },
   { id: "frost", label: "Frost", hint: "Sky cyan", colors: ["#060B14", "#121C2E", "#38BDF8"] },
-  { id: "custom", label: "Custom", hint: "Nebula base, your accent", colors: ["#0B0614", "#1E1433", "#8B5CF6"] },
+  { id: "custom", label: "Custom", hint: "Charcoal base, your accent", colors: ["#101012", "#1C1C20", "#8B5CF6"] },
 ] as const;
 
 export const ACCENT_CHIPS = [
@@ -60,6 +60,8 @@ export function writeFontScale(scale: number): void {
   document.documentElement.style.setProperty("--font-scale", next.toFixed(2));
 }
 
+const HEX_COLOR = /^#([0-9a-f]{6})$/i;
+
 function hexAlpha(hex: string, alpha: number): string {
   const n = hex.replace("#", "");
   const r = Number.parseInt(n.slice(0, 2), 16);
@@ -68,20 +70,44 @@ function hexAlpha(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
+/** Mix a hex toward white so secondary accent text stays readable. */
+function lighten(hex: string, amount = 0.42): string {
+  const n = hex.replace("#", "");
+  const mix = (channel: number) => Math.round(channel + (255 - channel) * amount);
+  const r = mix(Number.parseInt(n.slice(0, 2), 16));
+  const g = mix(Number.parseInt(n.slice(2, 4), 16));
+  const b = mix(Number.parseInt(n.slice(4, 6), 16));
+  return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
+}
+
+/**
+ * Named chips or a live `#rrggbb` from the color picker.
+ * Unknown values fall back to galactic purple (violet).
+ */
+export function resolveAccent(uiAccent: string | null | undefined): { id: string; hex: string } {
+  if (uiAccent && HEX_COLOR.test(uiAccent)) {
+    return { id: "custom", hex: uiAccent.toLowerCase() };
+  }
+  const chip = ACCENT_CHIPS.find((entry) => entry.id === uiAccent) ?? ACCENT_CHIPS[0];
+  return { id: chip.id, hex: chip.hex.toLowerCase() };
+}
+
 /** Paint theme, accent, density and motion onto `:root`. Safe to call often. */
 export function applyAppearance(settings: AppearanceSlice): void {
   const root = document.documentElement;
-  const accent = ACCENT_CHIPS.find((chip) => chip.id === settings.uiAccent) ?? ACCENT_CHIPS[0];
+  const accent = resolveAccent(settings.uiAccent);
 
   root.dataset.theme = normalizeTheme(settings.theme);
   root.dataset.density = settings.uiCompact ? "compact" : "comfortable";
+  root.dataset.accent = accent.hex;
   root.classList.add("dark");
   root.classList.toggle("no-animations", !settings.uiAnimations || settings.reduceMotion);
 
   root.style.setProperty("--accent", accent.hex);
-  root.style.setProperty("--accent-soft", accent.hex);
+  root.style.setProperty("--accent-soft", lighten(accent.hex));
   root.style.setProperty("--accent-dim", hexAlpha(accent.hex, 0.22));
-  root.style.setProperty("--accent-glow", hexAlpha(accent.hex, 0.35));
+  root.style.setProperty("--accent-glow", hexAlpha(accent.hex, 0.38));
+  root.style.setProperty("--rim-light", hexAlpha(accent.hex, 0.55));
   root.style.setProperty("--primary", accent.hex);
   root.style.setProperty("--ring", hexAlpha(accent.hex, 0.6));
   const scale = readFontScale();
