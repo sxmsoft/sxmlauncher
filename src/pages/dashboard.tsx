@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { useNavigate } from "react-router-dom";
 
@@ -27,6 +27,11 @@ export function DashboardPage() {
   const account = useActiveAccount();
 
   const [createOpen, setCreateOpen] = useState(false);
+  useEffect(() => {
+    const open = () => setCreateOpen(true);
+    window.addEventListener("sxml-new-instance", open);
+    return () => window.removeEventListener("sxml-new-instance", open);
+  }, []);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [joinOpen, setJoinOpen] = useState(false);
 

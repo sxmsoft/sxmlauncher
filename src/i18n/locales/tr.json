@@ -278,5 +278,26 @@
     "settingsBody": "Başlatıcının ne yaptığını Discord’da gösterir. Uygulama kimliği boşsa kapalıdır. Discord çalışmıyorsa hiçbir şey olmaz.",
     "appId": "Uygulama kimliği",
     "appIdHint": "Discord Developer Portal’daki rakamlar. SXML_DISCORD_APPLICATION_ID bu alanı ezer. Logoyu Rich Presence görseli olarak sxmlauncher anahtarıyla yükle."
+  },
+  "errors": {
+    "relogin": "Yeniden giriş yap. Bu oturumun süresi doldu.",
+    "sxaccOffline": "sx.acc’e ulaşılamıyor. Bağlantıyı kontrol edip yeniden dene.",
+    "couldNotLaunch": "Başlatılamadı",
+    "couldNotApplySkin": "Skin uygulanamadı",
+    "couldNotReloadSkin": "Skin yeniden yüklenemedi",
+    "couldNotRefreshSession": "Oturum yenilenemedi",
+    "skinApplied": "Skin uygulandı",
+    "skinAppliedBody": "Yüklendi. Oyun bir sonraki açılışta bunu kullanır."
+  },
+  "menu": {
+    "app": "SXMLAUNCHER",
+    "cut": "Kes",
+    "copy": "Kopyala",
+    "paste": "Yapıştır",
+    "selectAll": "Tümünü seç",
+    "play": "Oyna",
+    "open": "Aç",
+    "install": "Yükle",
+    "newInstance": "Yeni örnek"
   }
 }

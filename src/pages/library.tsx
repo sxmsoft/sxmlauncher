@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useNavigate } from "react-router-dom";
 
@@ -33,6 +33,11 @@ export function LibraryPage() {
   const importFolder = useImportInstance();
 
   const [createOpen, setCreateOpen] = useState(false);
+  useEffect(() => {
+    const open = () => setCreateOpen(true);
+    window.addEventListener("sxml-new-instance", open);
+    return () => window.removeEventListener("sxml-new-instance", open);
+  }, []);
   const [filter, setFilter] = useState<(typeof FILTERS)[number]["id"]>("all");
 
   const visible = useMemo(() => {
@@ -48,7 +53,7 @@ export function LibraryPage() {
   }, [instances.data, filter, query]);
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-5" data-context="library">
       <PageHeader
         title={t("library.title")}
         description={t("library.subtitle")}

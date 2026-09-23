@@ -115,9 +115,9 @@ export function LoginDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[min(96vw,920px)] max-w-[920px] overflow-hidden p-0">
-        <div className="grid min-h-[520px] grid-cols-[220px_minmax(0,1fr)]">
-          <aside className="relative flex flex-col justify-between overflow-hidden border-r border-white/8 bg-[#121214] p-6">
+      <DialogContent className="flex h-[min(88vh,860px)] w-[min(96vw,920px)] max-w-[920px] flex-col overflow-hidden p-0">
+        <div className="grid h-full min-h-0 grid-cols-1 md:grid-cols-[220px_minmax(0,1fr)]">
+          <aside className="relative hidden flex-col justify-between overflow-hidden border-r border-white/8 bg-[#121214] p-6 md:flex">
             <div
               aria-hidden
               className="pointer-events-none absolute inset-0"
@@ -135,7 +135,7 @@ export function LoginDialog({
             </div>
           </aside>
 
-          <div className="p-6">
+          <div className="min-h-0 overflow-y-auto overscroll-contain p-6">
         <DialogHeader>
           <DialogTitle>{t("login.title")}</DialogTitle>
           <DialogDescription>{t("login.body")}</DialogDescription>

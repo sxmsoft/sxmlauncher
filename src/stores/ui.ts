@@ -8,6 +8,8 @@
 
 import { create } from "zustand";
 
+import i18n from "@/i18n";
+import { CommandFailure } from "@/services/ipc";
 import type { SettingsSection, ToastTone } from "@/types/system";
 
 export interface Toast {
@@ -92,8 +94,20 @@ export const toast = {
   warning: (title: string, message?: string) =>
     useUiStore.getState().pushToast("warning", title, message),
   error: (error: unknown, title = "Something went wrong") => {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = describeFailure(error);
     return useUiStore.getState().pushToast("error", title, message);
   },
   dismiss: (id: string) => useUiStore.getState().dismissToast(id),
 };
+
+/** Map sx.acc transport and expired-session failures to a sentence. */
+function describeFailure(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  if (error instanceof CommandFailure && error.code === "UNAUTHORIZED") {
+    return i18n.t("errors.relogin");
+  }
+  if (/could not reach sx\.acc/i.test(raw)) {
+    return i18n.t("errors.sxaccOffline");
+  }
+  return raw;
+}

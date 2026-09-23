@@ -562,11 +562,9 @@ pub const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 /// Build the shared HTTP client (kept here so every registry uses the same
 /// timeouts and connection pool).
 pub fn http_client() -> AppResult<reqwest::Client> {
-    reqwest::Client::builder()
+    crate::http::client_builder()
         .user_agent(USER_AGENT)
         .timeout(HTTP_TIMEOUT)
-        .connect_timeout(Duration::from_secs(10))
-        .pool_max_idle_per_host(8)
         .build()
         .map_err(|err| AppError::Network(format!("cannot build http client: {err}")))
 }

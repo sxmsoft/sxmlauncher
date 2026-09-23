@@ -15,6 +15,7 @@ pub mod cancel;
 pub mod commands;
 pub mod config;
 pub mod error;
+pub mod http;
 pub mod instances;
 pub mod jobs;
 pub mod models;
@@ -29,6 +30,63 @@ use tauri::Manager;
 
 use crate::error::AppResult;
 use crate::state::AppState;
+
+/// Turn off the stock WebView context menu (Inspect, Reload, View Source).
+///
+/// The page also calls `preventDefault` on `contextmenu`. WebView2 and
+/// WebKitGTK can still paint their own menu unless the native setting is off.
+fn disable_stock_webview_menu(window: &tauri::WebviewWindow) {
+    #[cfg(windows)]
+    {
+        let _ = window.with_webview(|platform| unsafe {
+            let Ok(core) = platform.controller.CoreWebView2() else {
+                return;
+            };
+            let Ok(settings) = core.Settings() else {
+                return;
+            };
+            let _ = settings.SetAreDefaultContextMenusEnabled(false);
+            // DevTools and the browser accelerator keys (F12, Ctrl+Shift+I)
+            // stay available in debug builds.
+            #[cfg(not(debug_assertions))]
+            {
+                let _ = settings.SetAreDevToolsEnabled(false);
+                use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+                if let Ok(settings3) = settings.cast::<ICoreWebView2Settings3>() {
+                    let _ = settings3.SetAreBrowserAcceleratorKeysEnabled(false);
+                }
+            }
+        });
+    }
+
+    #[cfg(all(target_os = "linux", debug_assertions))]
+    {
+        use webkit2gtk::WebViewExt;
+        let _ = window.with_webview(|platform| {
+            // TRUE stops WebKit from showing the proposed menu.
+            platform.inner().connect_context_menu(|_, _, _, _| true);
+        });
+    }
+    #[cfg(all(target_os = "linux", not(debug_assertions)))]
+    {
+        use webkit2gtk::{SettingsExt, WebViewExt};
+        let _ = window.with_webview(|platform| {
+            let view = platform.inner();
+            view.connect_context_menu(|_, _, _, _| true);
+            if let Some(settings) = view.settings() {
+                settings.set_enable_developer_extras(false);
+            }
+        });
+    }
+
+    // WKWebView has no public "disable context menu" flag. The capture-phase
+    // `contextmenu` listener in `index.html` cancels it before AppKit paints
+    // Inspect / Reload.
+    #[cfg(target_os = "macos")]
+    {
+        let _ = window;
+    }
+}
 
 /// Build and run the desktop application.
 pub fn run() {
@@ -103,6 +161,7 @@ pub fn run() {
             // Load the window only once state exists, so the first command the
             // UI issues always finds it.
             if let Some(window) = app.get_webview_window("main") {
+                disable_stock_webview_menu(&window);
                 let _ = window.show();
             }
             Ok(())

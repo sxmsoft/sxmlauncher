@@ -1,6 +1,7 @@
 /** Account queries and the sign-in mutations for every provider. */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 
 import { qk } from "@/lib/query-client";
 import { accountService } from "@/services";
@@ -175,6 +176,7 @@ export function useSignOut() {
 /** Force a token refresh; useful when a session is near expiry. */
 export function useRefreshAccount() {
   const client = useQueryClient();
+  const { t } = useTranslation();
   return useMutation({
     mutationFn: (id: string) => accountService.refresh(id),
     onSuccess: (account) => {
@@ -182,13 +184,14 @@ export function useRefreshAccount() {
       void client.invalidateQueries({ queryKey: qk.accounts });
       toast.success("Session refreshed");
     },
-    onError: (error) => toast.error(error, "Could not refresh the session"),
+    onError: (error) => toast.error(error, t("errors.couldNotRefreshSession")),
   });
 }
 
 /** Re-read an account's skin/cape from its provider and persist it. */
 export function useRefreshSkin() {
   const client = useQueryClient();
+  const { t } = useTranslation();
   return useMutation({
     mutationFn: (id: string) => accountService.refreshSkin(id),
     onSuccess: () => {
@@ -196,7 +199,7 @@ export function useRefreshSkin() {
       void client.invalidateQueries({ queryKey: qk.activeAccount });
       toast.success("Skin updated", "Fetched the current texture from the provider");
     },
-    onError: (error) => toast.error(error, "Could not reload the skin"),
+    onError: (error) => toast.error(error, t("errors.couldNotReloadSkin")),
   });
 }
 
@@ -211,6 +214,7 @@ export function useRefreshSkin() {
  */
 export function useUploadSkin() {
   const client = useQueryClient();
+  const { t } = useTranslation();
   return useMutation({
     mutationFn: ({ id, model, png }: { id: string; model: SkinModel; png: Uint8Array }) =>
       accountService.uploadSkin(id, model, png),
@@ -224,11 +228,11 @@ export function useUploadSkin() {
       }
       void client.invalidateQueries({ queryKey: qk.accounts });
       if (outcome.uploaded) {
-        toast.success("Skin applied", "Uploaded to Mojang — the game picks it up next launch");
+        toast.success(t("errors.skinApplied"), t("errors.skinAppliedBody"));
       } else if (outcome.message) {
         toast.info("Upload happens on the website", outcome.message);
       }
     },
-    onError: (error) => toast.error(error, "Could not apply the skin"),
+    onError: (error) => toast.error(error, t("errors.couldNotApplySkin")),
   });
 }

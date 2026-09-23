@@ -13,6 +13,18 @@
       rel="stylesheet"
     />
     <title>SXMLAUNCHER</title>
+    <script>
+      // Cancel the stock WebView menu before React mounts. WebView2 and
+      // WKWebView honor preventDefault on contextmenu; the native setting
+      // in the shell covers the cases that ignore the DOM event.
+      window.addEventListener(
+        "contextmenu",
+        function (event) {
+          event.preventDefault();
+        },
+        true,
+      );
+    </script>
   </head>
   <body>
     <div id="root"></div>

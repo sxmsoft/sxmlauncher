@@ -1960,6 +1960,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "rustls 0.23.44",
+ "rustls-native-certs 0.8.4",
  "tokio",
  "tokio-rustls 0.26.5",
  "tower-service",
@@ -3733,6 +3734,7 @@ dependencies = [
  "pin-project-lite",
  "quinn",
  "rustls 0.23.44",
+ "rustls-native-certs 0.8.4",
  "rustls-pki-types",
  "serde",
  "serde_json",
@@ -4676,6 +4678,8 @@ dependencies = [
  "url",
  "uuid 1.26.1",
  "walkdir",
+ "webkit2gtk",
+ "webview2-com",
  "zip 5.1.1",
 ]
 

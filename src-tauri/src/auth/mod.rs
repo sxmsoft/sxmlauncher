@@ -282,11 +282,7 @@ impl AccountManager {
         vault: Arc<dyn CredentialVault>,
         config: ProviderConfig,
     ) -> Self {
-        let http = reqwest::Client::builder()
-            .user_agent(concat!("SXMLauncher/", env!("CARGO_PKG_VERSION")))
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+        let http = crate::http::client();
 
         Self {
             db,
@@ -805,6 +801,9 @@ impl AccountManager {
                 self.mark_signed_out(account).await?;
                 Err(AppError::Unauthorized)
             }
+            // The 120s skew refreshes a token that the server still accepts.
+            // A transport failure in that window must not block Play.
+            Err(AppError::Network(_)) if Utc::now() < stored.expires_at => Ok(stored),
             Err(err) => Err(err),
         }
     }
@@ -1088,11 +1087,7 @@ impl AccountManager {
 
     /// A short-lived client for skin lookups (long timeout, no session state).
     fn http_for_skins(&self) -> reqwest::Client {
-        reqwest::Client::builder()
-            .user_agent(concat!("SXMLauncher/", env!("CARGO_PKG_VERSION")))
-            .timeout(std::time::Duration::from_secs(15))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new())
+        crate::http::client()
     }
 }
 

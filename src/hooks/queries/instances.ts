@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 
 import { qk } from "@/lib/query-client";
 import { instanceService } from "@/services";
@@ -183,6 +184,7 @@ export function useToggleMod() {
  */
 export function useLaunchInstance() {
   const client = useQueryClient();
+  const { t } = useTranslation();
 
   return useMutation({
     mutationFn: ({ id, options }: { id: string; options?: LaunchOptions }) =>
@@ -196,7 +198,7 @@ export function useLaunchInstance() {
         toast.success(`Launching ${report.instance.name}`, `pid ${report.pid}`);
       }
     },
-    onError: (error) => toast.error(error, "Could not launch"),
+    onError: (error) => toast.error(error, t("errors.couldNotLaunch")),
   });
 }
 

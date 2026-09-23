@@ -130,7 +130,8 @@ impl Endpoints {
         if !self.scopes.is_empty() {
             pairs.push(("scope", self.scopes.as_str()));
         }
-        append_query(&self.authorize, &pairs)
+        // Open the HTML consent screen, not the POST-only API path.
+        append_query(&browser_authorize_page(&self.authorize), &pairs)
     }
 }
 
@@ -362,8 +363,8 @@ impl SxAccAuth {
                 "verificationUri",
             ],
         )
-        .unwrap_or(device_url.as_str())
-        .to_string();
+        .map(|raw| human_device_page(raw, &user_code))
+        .unwrap_or_else(|| human_device_page(&device_url, &user_code));
         let expires_in = find_i64(&value, &["expires_in", "expiresIn"]).unwrap_or(900).max(30);
         let interval = find_i64(&value, &["interval"]).unwrap_or(5).clamp(1, 60);
         let message = find_string(&value, &["message"])
@@ -473,13 +474,16 @@ impl SxAccAuth {
         png: Vec<u8>,
     ) -> AppResult<Option<SkinProfile>> {
         let endpoints = self.discover().await?;
-        let _ = model;
         let part = reqwest::multipart::Part::bytes(png)
             .file_name("skin.png")
             .mime_str("image/png")
             .map_err(|err| AppError::Account(format!("could not build the skin upload: {err}")))?;
-        // Live sx.acc v2 accepts a single multipart field named `file` on PUT.
-        let form = reqwest::multipart::Form::new().part("file", part);
+        // Live sx.acc accepts multipart fields `file` (PNG) and `model`
+        // (`classic` or `slim`) on PUT. GET and POST on this path 404.
+        let form = reqwest::multipart::Form::new()
+            .text("model", model.as_str())
+            .part("file", part);
+        // Multipart bodies are not replayable, so this is a single send.
         let response = self
             .http
             .put(&endpoints.skin)
@@ -487,7 +491,7 @@ impl SxAccAuth {
             .multipart(form)
             .send()
             .await
-            .map_err(|err| AppError::Network(format!("sx.acc skin upload failed: {err}")))?;
+            .map_err(|err| transport_error(&endpoints.skin, err))?;
         let status = response.status();
         if status == reqwest::StatusCode::NOT_FOUND || status == reqwest::StatusCode::METHOD_NOT_ALLOWED {
             return Ok(None);
@@ -550,14 +554,22 @@ impl SxAccAuth {
                 }
             }
         }
+        // GET /v1/profile/skin is not a route (PUT uploads, DELETE clears).
+        // A missing skinUrl is filled from the public authlib profile, which
+        // carries the texture URL the preview and the game both use.
         if session.skin.skin_url.is_none() {
-            if let Ok(skin_doc) = self
-                .get_bearer(&endpoints.skin, &session.tokens.access_token)
-                .await
-            {
-                let skin = extract_skin(&self.base_url, &skin_doc);
-                if skin.skin_url.is_some() || skin.cape_url.is_some() {
-                    session.skin = skin;
+            let profile_url = format!(
+                "{}/authlib/sessionserver/session/minecraft/profile/{}",
+                self.base_url,
+                session.uuid.simple()
+            );
+            if let Ok(doc) = self.get_public(&profile_url).await {
+                let skin = extract_skin(&self.base_url, &doc);
+                if let Some(url) = skin.skin_url {
+                    session.skin.skin_url = Some(url);
+                }
+                if let Some(url) = skin.cape_url {
+                    session.skin.cape_url = Some(url);
                 }
             }
         }
@@ -567,12 +579,16 @@ impl SxAccAuth {
     async fn discover(&self) -> AppResult<Endpoints> {
         self.require_base()?;
         let url = format!("{}/v1", self.base_url);
-        let response = match self.http.get(&url).timeout(DISCOVERY_TIMEOUT).send().await {
+        let response = match self
+            .send(self.http.get(&url).timeout(DISCOVERY_TIMEOUT))
+            .await
+        {
             Ok(response) => response,
             Err(err) => {
                 return Err(AppError::Network(format!(
-                    "could not reach sx.acc at {}: {err}",
-                    self.base_url
+                    "could not reach sx.acc at {}: {}",
+                    self.base_url,
+                    crate::http::error_chain(&err)
                 )))
             }
         };
@@ -596,23 +612,17 @@ impl SxAccAuth {
 
     async fn post_json(&self, url: &str, body: &Value) -> AppResult<Value> {
         let response = self
-            .http
-            .post(url)
-            .json(body)
-            .send()
+            .send(self.http.post(url).json(body))
             .await
-            .map_err(|err| AppError::Network(format!("sx.acc request to {url} failed: {err}")))?;
+            .map_err(|err| transport_error(url, err))?;
         read_json(response).await
     }
 
     async fn post_token(&self, url: &str, fields: &[(&str, &str)]) -> AppResult<Value> {
         let response = self
-            .http
-            .post(url)
-            .form(fields)
-            .send()
+            .send(self.http.post(url).form(fields))
             .await
-            .map_err(|err| AppError::Network(format!("sx.acc token request failed: {err}")))?;
+            .map_err(|err| transport_error(url, err))?;
         if response.status() == reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE {
             let mut map = serde_json::Map::new();
             for (key, value) in fields {
@@ -625,13 +635,37 @@ impl SxAccAuth {
 
     async fn get_bearer(&self, url: &str, access_token: &str) -> AppResult<Value> {
         let response = self
-            .http
-            .get(url)
-            .bearer_auth(access_token)
-            .send()
+            .send(self.http.get(url).bearer_auth(access_token))
             .await
-            .map_err(|err| AppError::Network(format!("sx.acc profile request failed: {err}")))?;
+            .map_err(|err| transport_error(url, err))?;
         read_json(response).await
+    }
+
+    async fn get_public(&self, url: &str) -> AppResult<Value> {
+        let response = self
+            .send(self.http.get(url))
+            .await
+            .map_err(|err| transport_error(url, err))?;
+        read_json(response).await
+    }
+
+    /// One retry for connect/timeouts. Vercel cold starts and inspecting
+    /// proxies reset the first handshake often enough that a single repeat
+    /// is the difference between Play and a dead session.
+    async fn send(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, reqwest::Error> {
+        let Some(retry) = request.try_clone() else {
+            return request.send().await;
+        };
+        match request.send().await {
+            Ok(response) => Ok(response),
+            Err(err) if err.is_connect() || err.is_timeout() || err.is_request() => {
+                retry.send().await
+            }
+            Err(err) => Err(err),
+        }
     }
 
     fn require_base(&self) -> AppResult<()> {
@@ -771,6 +805,59 @@ fn validate_email(email: &str) -> AppResult<()> {
         ));
     }
     Ok(())
+}
+
+/// Map the POST-only API path to the SPA page that renders HTML.
+///
+/// `GET /v1/oauth/authorize` on live sx.acc is
+/// `{"error":"not_found","message":"No such route."}`. The consent screen is
+/// `{origin}/authorize`, which POSTs that API and redirects to the launcher.
+/// A discovery URL that is already a page (anything else) is left alone.
+fn browser_authorize_page(api_authorize: &str) -> String {
+    rewrite_api_to_spa(api_authorize, "/v1/oauth/authorize", "/authorize")
+}
+
+/// Device grants name `{origin}/device` (HTML). If a server only returns the
+/// JSON API path, open the SPA and carry the user code.
+fn human_device_page(raw: &str, user_code: &str) -> String {
+    let page = rewrite_api_to_spa(raw, "/v1/oauth/device", "/device");
+    if page.contains("code=") || user_code.is_empty() {
+        return page;
+    }
+    let Ok(mut url) = url::Url::parse(&page) else {
+        return format!("{page}?code={user_code}");
+    };
+    // The complete URI already has the code. A bare `/device` page needs it.
+    if url.path().trim_end_matches('/') == "/device" && url.query().is_none() {
+        url.query_pairs_mut().append_pair("code", user_code);
+        return url.to_string();
+    }
+    page
+}
+
+fn rewrite_api_to_spa(raw: &str, api_suffix: &str, spa_path: &str) -> String {
+    let Ok(mut url) = url::Url::parse(raw) else {
+        return raw.trim_end_matches('/').to_string();
+    };
+    let path = url.path().trim_end_matches('/').to_string();
+    if path.ends_with(api_suffix) {
+        url.set_path(spa_path);
+        url.set_query(None);
+        url.set_fragment(None);
+        let mut out = url.to_string();
+        while out.ends_with('/') {
+            out.pop();
+        }
+        return out;
+    }
+    raw.trim_end_matches('/').to_string()
+}
+
+fn transport_error(url: &str, err: reqwest::Error) -> AppError {
+    AppError::Network(format!(
+        "could not reach sx.acc ({url}): {}",
+        crate::http::error_chain(&err)
+    ))
 }
 
 fn append_query(url: &str, pairs: &[(&str, &str)]) -> AppResult<String> {
@@ -1003,6 +1090,13 @@ fn extract_skin(base: &str, value: &Value) -> SkinProfile {
 fn apply_skin_node(base: &str, node: &Value, skin: &mut SkinProfile) {
     if let Some(url) = string_field(node, &["skinUrl", "skin_url"]) {
         skin.skin_url = Some(absolute_url(base, url));
+    }
+    if skin.skin_url.is_none() {
+        if let Some(hash) = string_field(node, &["skinHash", "skin_hash"]) {
+            if hash.chars().all(|c| c.is_ascii_hexdigit()) && hash.len() >= 8 {
+                skin.skin_url = Some(absolute_url(base, &format!("/authlib/textures/{hash}")));
+            }
+        }
     }
     if let Some(url) = string_field(node, &["capeUrl", "cape_url"]) {
         skin.cape_url = Some(absolute_url(base, url));
@@ -1264,7 +1358,14 @@ mod tests {
     fn authorize_url_is_the_public_client_with_pkce() {
         let endpoints = Endpoints::standard("http://127.0.0.1:9");
         let url = endpoints.authorize_url("chal", "st").unwrap();
-        assert!(url.starts_with("http://127.0.0.1:9/v1/oauth/authorize?"));
+        assert!(
+            url.starts_with("http://127.0.0.1:9/authorize?"),
+            "{url}"
+        );
+        assert!(
+            !url.contains("/v1/oauth/authorize"),
+            "browser sign-in must not open the POST-only API: {url}"
+        );
         assert!(url.contains("client_id=sxmlauncher"));
         assert!(url.contains("response_type=code"));
         assert!(url.contains("code_challenge=chal"));
@@ -1290,6 +1391,46 @@ mod tests {
         assert_eq!(
             endpoints.authorize,
             "https://accounts.example/oauth/authorize"
+        );
+        let browser = endpoints.authorize_url("chal", "st").unwrap();
+        assert!(
+            browser.starts_with("https://accounts.example/oauth/authorize?"),
+            "a non-API discovery URL stays the browser page: {browser}"
+        );
+    }
+
+    #[test]
+    fn live_discovery_keeps_refresh_and_opens_the_spa() {
+        let doc = json!({
+            "service": "sx.acc",
+            "version": "2.0.1",
+            "endpoints": {
+                "register": "/v1/auth/register",
+                "login": "/v1/auth/login",
+                "refresh": "/v1/auth/refresh",
+                "profile": "/v1/profile",
+                "skin": "/v1/profile/skin"
+            }
+        });
+        let endpoints = Endpoints::from_discovery("https://sx-acc.vercel.app", &doc);
+        assert_eq!(
+            endpoints.refresh,
+            "https://sx-acc.vercel.app/v1/auth/refresh"
+        );
+        assert_eq!(endpoints.skin, "https://sx-acc.vercel.app/v1/profile/skin");
+        let browser = endpoints.authorize_url("chal", "st").unwrap();
+        assert!(browser.starts_with("https://sx-acc.vercel.app/authorize?"));
+        assert!(!browser.contains("/v1/oauth/authorize"));
+        assert_eq!(
+            human_device_page(
+                "https://sx-acc.vercel.app/device?code=XVA3-3YYB",
+                "XVA3-3YYB"
+            ),
+            "https://sx-acc.vercel.app/device?code=XVA3-3YYB"
+        );
+        assert_eq!(
+            human_device_page("https://sx-acc.vercel.app/v1/oauth/device", "XVA3-3YYB"),
+            "https://sx-acc.vercel.app/device?code=XVA3-3YYB"
         );
     }
 
@@ -1449,11 +1590,17 @@ mod tests {
                 && !body.contains("clientId")
         }));
         assert!(recorded.iter().any(|(method, path, body)| {
-            method == "PUT" && path == "/v1/profile/skin" && body.contains("name=\"file\"")
+            method == "PUT"
+                && path == "/v1/profile/skin"
+                && body.contains("name=\"file\"")
+                && body.contains("name=\"model\"")
+                && body.contains("classic")
         }));
-        assert!(!recorded
-            .iter()
-            .any(|(_, path, _)| path == "/v1/login" || path == "/v1/register"));
+        assert!(!recorded.iter().any(|(method, path, _)| {
+            method == "GET" && path == "/v1/profile/skin"
+                || path == "/v1/login"
+                || path == "/v1/register"
+        }));
     }
 
     #[tokio::test]
@@ -1470,6 +1617,12 @@ mod tests {
         );
 
         let pending = manager.begin_sxacc_login().await.unwrap();
+        assert!(
+            pending.authorize_url.contains("/authorize?"),
+            "{}",
+            pending.authorize_url
+        );
+        assert!(!pending.authorize_url.contains("/v1/oauth/authorize"));
         assert!(pending.authorize_url.contains("client_id=sxmlauncher"));
         assert!(pending
             .authorize_url
@@ -1528,13 +1681,17 @@ mod tests {
                     let mut buf = Vec::new();
                     let mut tmp = [0u8; 4096];
                     loop {
-                        let n = socket.read(&mut tmp).await.unwrap_or(0);
-                        if n == 0 {
-                            break;
-                        }
-                        buf.extend_from_slice(&tmp[..n]);
                         if request_is_complete(&buf) || buf.len() > 64 * 1024 {
                             break;
+                        }
+                        // Multipart uploads may be chunked. Wait briefly for
+                        // the next bytes instead of treating a header-only
+                        // read as the whole request.
+                        let read = tokio::time::timeout(Duration::from_millis(150), socket.read(&mut tmp)).await;
+                        match read {
+                            Ok(Ok(0)) | Err(_) => break,
+                            Ok(Ok(n)) => buf.extend_from_slice(&tmp[..n]),
+                            Ok(Err(_)) => break,
                         }
                     }
                     let req = String::from_utf8_lossy(&buf).to_string();
@@ -1547,7 +1704,12 @@ mod tests {
                         .split('?')
                         .next()
                         .unwrap_or("/");
-                    let body = req.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+                    // nth(1) stops at the next blank line, which multipart
+                    // bodies contain. Keep every byte after the HTTP headers.
+                    let body = req
+                        .split_once("\r\n\r\n")
+                        .map(|(_, rest)| rest.to_string())
+                        .unwrap_or_default();
                     hits.lock()
                         .await
                         .push((method.to_string(), path.to_string(), body.clone()));
@@ -1604,6 +1766,18 @@ mod tests {
             return false;
         };
         let header = String::from_utf8_lossy(&buf[..split]);
+        let chunked = header.lines().any(|line| {
+            let Some((name, value)) = line.split_once(':') else {
+                return false;
+            };
+            name.eq_ignore_ascii_case("transfer-encoding")
+                && value.to_ascii_lowercase().contains("chunked")
+        });
+        if chunked {
+            let body = &buf[split + 4..];
+            return body.windows(7).any(|window| window == b"\r\n0\r\n\r\n")
+                || body.starts_with(b"0\r\n\r\n");
+        }
         let length = header.lines().find_map(|line| {
             let (name, value) = line.split_once(':')?;
             if name.eq_ignore_ascii_case("content-length") {
@@ -1614,7 +1788,19 @@ mod tests {
         });
         match length {
             Some(length) => buf.len() >= split + 4 + length,
-            None => true,
+            // GET/HEAD/DELETE have no body. POST/PUT without a length are
+            // still arriving (chunked multipart); the read loop stops on
+            // timeout or EOF.
+            None => {
+                let method = header
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("");
+                matches!(method, "GET" | "HEAD" | "DELETE")
+            }
         }
     }
 

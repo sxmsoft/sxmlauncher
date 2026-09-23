@@ -1,6 +1,7 @@
 import { Outlet } from "react-router-dom";
 
 import { ActivityPanel } from "@/components/jobs/activity-panel";
+import { AppContextMenu } from "@/components/ui/app-context-menu";
 import { Sidebar } from "@/components/layout/sidebar";
 import { StatusStrip } from "@/components/layout/status-strip";
 import { TitleBar } from "@/components/layout/title-bar";
@@ -44,6 +45,7 @@ export function AppShell() {
         </div>
         <ActivityPanel />
         <Toaster />
+        <AppContextMenu />
       </div>
     </TooltipProvider>
   );

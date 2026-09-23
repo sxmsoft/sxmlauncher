@@ -42,7 +42,11 @@ futures = "0.3"
 async-trait = "0.1"
 
 # --- http / crypto / ids ------------------------------------------------
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "gzip", "multipart"] }
+# rustls-tls = webpki roots. rustls-tls-native-roots adds the OS store
+# (Norton / enterprise intercept CAs). system-proxy reads WinHTTP and the
+# macOS proxy. HTTP/2 is left off: enabling it truncated streamed multipart
+# bodies (skin upload) on the HTTP/1.1 path this client actually speaks.
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "rustls-tls-native-roots", "gzip", "multipart", "system-proxy"] }
 sha1 = "0.10"
 sha2 = "0.10"
 hex = "0.4"
@@ -83,6 +87,12 @@ tar = "0.4.46"
 flate2 = "1.1.10"
 # Discord IPC. Connect failures (Discord not running) are ignored at runtime.
 discord-rich-presence = "1.1.0"
+
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.38"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = "2"
 
 [features]
 # Default Tauri feature set; `custom-protocol` is enabled by `tauri build`.

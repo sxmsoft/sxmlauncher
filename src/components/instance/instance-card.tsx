@@ -33,6 +33,9 @@ export function InstanceCard({
     <article
       role="button"
       tabIndex={0}
+      data-context="instance"
+      data-instance-id={instance.id}
+      data-instance-playable={playable ? "1" : "0"}
       onClick={onSelect}
       onDoubleClick={onOpen}
       onKeyDown={(event) => {
