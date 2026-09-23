@@ -795,6 +795,7 @@ function UpdatesSection() {
 }
 
 function DiagnosticsSection() {
+  const { t } = useTranslation();
   const info = useAppInfo();
   const nat = useNatProbe();
   const history = useSessionHistory();
@@ -807,6 +808,7 @@ function DiagnosticsSection() {
           <Badge variant="outline">{info.data?.version ?? "—"}</Badge>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2">
+          <Stat label={t("settings.developer")} value="SXMWARE" />
           <Stat label="Tauri" value={info.data?.tauriVersion ?? "—"} />
           <Stat label="Rust toolchain" value={info.data?.rustVersion ?? "—"} />
           <Stat label="Platform" value={`${info.data?.os ?? "?"} · ${info.data?.arch ?? "?"}`} />
@@ -873,7 +875,7 @@ function DiagnosticsSection() {
         </CardHeader>
         <CardContent className="text-muted-foreground flex flex-col gap-2 text-xs leading-relaxed">
           <p>
-            SXMLAUNCHER is MIT licensed. The Rust backend is in <code>src-tauri/src</code>,
+            SXMWARE makes SXMLAUNCHER. The project is MIT licensed. The Rust backend is in <code>src-tauri/src</code>,
             organized by domain: <code>auth</code>, <code>instances</code>, <code>mods</code>,{" "}
             <code>network</code> and <code>store</code>.
           </p>

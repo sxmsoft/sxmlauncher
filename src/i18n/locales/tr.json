@@ -160,6 +160,7 @@
     "accent": "Vurgu rengi",
     "accentHint": "Varsayılan galaktik mor. Özel renk aynı CSS değişkenlerini anında boyar.",
     "customAccent": "Özel renk",
+    "developer": "Geliştirici",
     "sxaccBase": "sx.acc adresi",
     "sxaccBaseHint": "Hesap API’si {BASE}/v1, authlib {BASE}/authlib/. Sunucun yoksa boş bırak. SXACC_BASE_URL bu alanı ezer."
   },

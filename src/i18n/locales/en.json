@@ -160,6 +160,7 @@
     "accent": "Accent",
     "accentHint": "Galactic purple is the default. A custom color paints the same CSS variables live.",
     "customAccent": "Custom color",
+    "developer": "Developer",
     "sxaccBase": "sx.acc base URL",
     "sxaccBaseHint": "Account API is {BASE}/v1 and authlib is {BASE}/authlib/. Leave empty until you have a server. SXACC_BASE_URL overrides this field."
   },
