@@ -839,6 +839,114 @@ mod tests {
         assert_eq!(refreshed.status, InstanceStatus::Ready);
     }
 
+    /// Fabric 1.20.1 with libraries only (no asset objects). Confirms the JVM
+    /// is handed a real classpath. Ignored because it downloads the client.
+    #[tokio::test]
+    #[ignore = "downloads the Minecraft 1.20.1 client, libraries, and Fabric"]
+    async fn live_fabric_launch_uses_a_real_classpath() {
+        let temp = tempdir();
+        let manager = manager(&temp.0);
+        let mut created = request("Fabric");
+        created.game_version = "1.20.1".into();
+        created.loader = Some(ModLoader::new(LoaderKind::Fabric, "0.16.14"));
+        let instance = manager
+            .create(created, Arc::new(NoopProgressSink))
+            .await
+            .expect("create");
+
+        let installer = crate::instances::installer::Installer::new(
+            manager.paths(),
+            Some(manager.db().clone()),
+            manager.engine().downloader(),
+            crate::mods::modrinth::http_client().expect("http"),
+        );
+        let version = installer
+            .mojang
+            .resolved_version_json("1.20.1")
+            .await
+            .expect("version json");
+        let version_dir = manager.paths().version_dir("1.20.1");
+        std::fs::create_dir_all(&version_dir).expect("version dir");
+        std::fs::write(
+            manager.paths().version_json("1.20.1"),
+            serde_json::to_vec_pretty(&version).expect("serialize"),
+        )
+        .expect("write version json");
+        let features = crate::models::version::FeatureSet::default();
+        let install_plan =
+            crate::instances::installer::build_install_plan(&version, manager.paths(), &features)
+                .expect("install plan");
+        installer
+            .download_files(
+                "Minecraft 1.20.1 libraries",
+                install_plan.files,
+                Arc::new(LiveInstallSink),
+            )
+            .await
+            .expect("download");
+
+        let loaded = crate::instances::loaders::install_loader(
+            &installer,
+            &instance.config,
+            Some(std::path::Path::new("/usr/bin/java")),
+            Arc::new(LiveInstallSink),
+        )
+        .await
+        .expect("fabric");
+
+        let mut instance = instance;
+        instance.config.loader.version = Some(loaded.version.clone());
+        let profile: crate::models::version::VersionJson = serde_json::from_str(
+            &std::fs::read_to_string(manager.paths().version_json(&loaded.profile_id))
+                .expect("profile"),
+        )
+        .expect("profile json");
+        let merged = crate::models::version::merge_profiles(&version, &profile);
+        let runtime = manager
+            .engine()
+            .java()
+            .probe_path(std::path::Path::new("/usr/bin/java"))
+            .await
+            .expect("java");
+        let plan =
+            crate::instances::launch::LaunchPlanner::new(manager.paths().clone(), vec![runtime])
+                .build(
+                    &instance,
+                    &merged,
+                    &crate::models::account::LaunchIdentity::offline("Steve", Uuid::new_v4()),
+                    &crate::instances::launch::LaunchExtras::default(),
+                )
+                .expect("launch plan");
+        let command = plan.redacted_command_line();
+        eprintln!("[launch] {command}");
+        assert!(
+            !command.contains("${classpath}"),
+            "fabric launch still has a placeholder classpath"
+        );
+        assert!(
+            plan.main_class.contains("KnotClient"),
+            "{}",
+            plan.main_class
+        );
+
+        let (_game, mut child) = crate::instances::launch::spawn(&plan, instance.config.id, None)
+            .await
+            .expect("spawn");
+        tokio::time::sleep(std::time::Duration::from_secs(12)).await;
+        let status = child.try_wait().expect("wait");
+        let log = std::fs::read_to_string(&plan.log_file).unwrap_or_default();
+        eprintln!("[launch] status={status:?}\n{log}");
+        let _ = child.kill().await;
+        assert!(
+            !log.contains("Could not find or load main class"),
+            "fabric JVM could not see the classpath:\n{log}"
+        );
+        assert!(
+            !log.contains("${classpath}"),
+            "log still shows a placeholder classpath:\n{log}"
+        );
+    }
+
     /// End-to-end install against the public meta APIs. Ignored by default
     /// because it downloads the Minecraft client, libraries and assets.
     #[tokio::test]
