@@ -1,12 +1,12 @@
 //! OAuth2 helpers shared by the Microsoft and Ely.by flows: PKCE (RFC 7636) and
 //! a loopback redirect server (RFC 8252, the native-app best practice).
 //!
-//! The loopback server binds `127.0.0.1` on an ephemeral port and answers
-//! exactly one authorization callback. It is intentionally dependency-free: a
-//! full HTTP framework for one request would be dead weight, and hand-parsing
-//! the request line keeps the surface that faces the browser tiny.
+//! The loopback server binds localhost (IPv4 and, when the OS allows it, IPv6)
+//! and answers exactly one authorization callback. It is intentionally
+//! dependency-free: a full HTTP framework for one request would be dead weight,
+//! and hand-parsing the request line keeps the surface that faces the browser tiny.
 
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 
 use base64::Engine;
@@ -18,7 +18,7 @@ use tokio::net::TcpListener;
 use crate::error::{AppError, AppResult};
 
 /// How long we wait for the user to finish signing in.
-const CALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
+pub(crate) const CALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
 /// Hard cap on the request we are willing to parse.
 const MAX_REQUEST_BYTES: usize = 16 * 1024;
 
@@ -70,16 +70,76 @@ pub fn random_state() -> String {
 }
 
 /// The result of a successful browser redirect.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallbackResult {
     pub code: String,
     pub state: String,
 }
 
+/// What a callback URL contained.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CallbackQuery {
+    /// `code` and `state` were both present.
+    Success(CallbackResult),
+    /// The provider redirected with `error` (and an optional description).
+    ProviderError(String),
+    /// Not a finished callback (favicon, empty probe, missing parameters).
+    Incomplete,
+}
+
+/// Parse an OAuth redirect.
+///
+/// Accepts a request-target (`/elyby/callback?code=...`) or an absolute URL
+/// (`ms-xal-00000000402b5328://auth?code=...`). Ely.by names the description
+/// `error_message`; Microsoft uses `error_description`. Both are read.
+pub fn parse_callback_query(raw: &str) -> AppResult<CallbackQuery> {
+    let parsed = if raw.contains("://") {
+        url::Url::parse(raw)
+    } else {
+        let target = if raw.starts_with('/') {
+            raw.to_string()
+        } else {
+            format!("/{raw}")
+        };
+        url::Url::parse(&format!("http://127.0.0.1{target}"))
+    }
+    .map_err(|err| AppError::Account(format!("malformed OAuth callback url: {err}")))?;
+
+    let mut code = None;
+    let mut state = None;
+    let mut error = None;
+    let mut description = None;
+    for (key, value) in parsed.query_pairs() {
+        match key.as_ref() {
+            "code" => code = Some(value.into_owned()),
+            "state" => state = Some(value.into_owned()),
+            "error" => error = Some(value.into_owned()),
+            "error_description" | "error_message" => description = Some(value.into_owned()),
+            _ => {}
+        }
+    }
+
+    if let Some(message) = match (error, description) {
+        (Some(error), Some(description)) => Some(format!("{error}: {description}")),
+        (Some(error), None) => Some(error),
+        (None, Some(description)) => Some(description),
+        (None, None) => None,
+    } {
+        return Ok(CallbackQuery::ProviderError(message));
+    }
+
+    match (code, state) {
+        (Some(code), Some(state)) => Ok(CallbackQuery::Success(CallbackResult { code, state })),
+        _ => Ok(CallbackQuery::Incomplete),
+    }
+}
+
 /// Loopback redirect listener for the authorization code flow.
 pub struct LoopbackServer {
-    listener: TcpListener,
+    listeners: Vec<TcpListener>,
     redirect_uri: String,
+    /// Path the provider will request, e.g. `/callback` or `/elyby/callback`.
+    callback_path: String,
 }
 
 impl LoopbackServer {
@@ -88,27 +148,38 @@ impl LoopbackServer {
         Self::bind_on(0).await
     }
 
-    /// Bind a *fixed* port.
-    ///
-    /// Needed by Ely.by: their application registration compares `redirect_uri`
-    /// exactly, so a random ephemeral port can never match. The port is part of
-    /// the Settings → Fixes value the user registered with them.
+    /// Bind a *fixed* port and answer `http://localhost:{port}/callback`.
     pub async fn bind_on(port: u16) -> AppResult<Self> {
-        let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port)))
-            .await
-            .map_err(|err| {
-                AppError::Account(format!(
-                    "cannot bind the sign-in callback on 127.0.0.1:{port} ({err}). \
-                     Another SXMLAUNCHER instance may already be listening there."
-                ))
-            })?;
-        let bound = listener
-            .local_addr()
-            .map_err(|err| AppError::Account(format!("cannot read loopback port: {err}")))?
-            .port();
+        let (listeners, bound) = bind_loopback(port).await?;
         Ok(Self {
-            listener,
+            listeners,
             redirect_uri: format!("http://localhost:{bound}/callback"),
+            callback_path: "/callback".to_string(),
+        })
+    }
+
+    /// Bind the port and path of an already-registered redirect URI.
+    ///
+    /// The string returned by [`Self::redirect_uri`] is the caller's URI
+    /// unchanged. Ely.by compares it exactly, so reconstructing it (or swapping
+    /// the path for `/callback`) makes the provider show "can not find
+    /// application".
+    pub async fn bind_for_redirect(redirect_uri: &str) -> AppResult<Self> {
+        let url = url::Url::parse(redirect_uri).map_err(|err| {
+            AppError::Account(format!("Ely.by redirect URI is not a URL: {err}"))
+        })?;
+        let port = url.port_or_known_default().unwrap_or(0);
+        let (listeners, _bound) = bind_loopback(port).await?;
+        let path = url.path().trim_end_matches('/');
+        let callback_path = if path.is_empty() {
+            "/callback".to_string()
+        } else {
+            path.to_string()
+        };
+        Ok(Self {
+            listeners,
+            redirect_uri: redirect_uri.to_string(),
+            callback_path,
         })
     }
 
@@ -118,7 +189,14 @@ impl LoopbackServer {
     }
 
     pub fn port(&self) -> Option<u16> {
-        self.listener.local_addr().ok().map(|addr| addr.port())
+        self.listeners
+            .first()
+            .and_then(|listener| listener.local_addr().ok())
+            .map(|addr| addr.port())
+    }
+
+    pub fn callback_path(&self) -> &str {
+        &self.callback_path
     }
 
     /// Wait for the browser to hit `/callback?code=...&state=...`.
@@ -138,7 +216,7 @@ impl LoopbackServer {
         let deadline = tokio::time::Instant::now() + timeout;
 
         loop {
-            let accept = tokio::time::timeout_at(deadline, self.listener.accept()).await;
+            let accept = tokio::time::timeout_at(deadline, accept_next(&self.listeners)).await;
             let (mut socket, _peer) = match accept {
                 Ok(Ok(connection)) => connection,
                 Ok(Err(err)) => {
@@ -168,84 +246,100 @@ impl LoopbackServer {
             };
 
             // Ignore anything that is not the callback path (favicon, probes).
-            if !target.starts_with("/callback") {
+            let path = target.split('?').next().unwrap_or(target).trim_end_matches('/');
+            if path != self.callback_path {
                 let _ = respond(&mut socket, 404, "Not found", "Waiting for sign-in…").await;
                 continue;
             }
 
-            // Parse query parameters from the request target.
-            let parsed = url::Url::parse(&format!("http://127.0.0.1{target}")).map_err(|err| {
-                AppError::Account(format!("malformed OAuth callback url: {err}"))
-            })?;
-            let mut code = None;
-            let mut state = None;
-            let mut error = None;
-            for (key, value) in parsed.query_pairs() {
-                match key.as_ref() {
-                    "code" => code = Some(value.into_owned()),
-                    "state" => state = Some(value.into_owned()),
-                    "error" => error = Some(value.into_owned()),
-                    "error_description" => {
-                        let description = value.into_owned();
-                        error = Some(match error.take() {
-                            Some(previous) => format!("{previous}: {description}"),
-                            None => description,
-                        })
+            match parse_callback_query(target)? {
+                CallbackQuery::ProviderError(error) => {
+                    let _ = respond(
+                        &mut socket,
+                        400,
+                        "Sign-in failed",
+                        &format!("The provider returned an error: {error}"),
+                    )
+                    .await;
+                    return Err(AppError::Account(format!(
+                        "authorization denied by provider: {error}"
+                    )));
+                }
+                CallbackQuery::Incomplete => {
+                    let _ = respond(
+                        &mut socket,
+                        400,
+                        "Malformed callback",
+                        "The sign-in response was missing its code or state.",
+                    )
+                    .await;
+                    continue;
+                }
+                CallbackQuery::Success(callback) => {
+                    // Reject a forged callback before exchanging the code.
+                    if callback.state != expected_state {
+                        let _ = respond(
+                            &mut socket,
+                            400,
+                            "State mismatch",
+                            "This sign-in attempt did not originate from SXMLAUNCHER.",
+                        )
+                        .await;
+                        return Err(AppError::Account(
+                            "OAuth state mismatch; the callback did not match this sign-in attempt"
+                                .to_string(),
+                        ));
                     }
-                    _ => {}
+
+                    let _ = respond(
+                        &mut socket,
+                        200,
+                        "You can close this tab",
+                        "SXMLAUNCHER is finishing your sign-in…",
+                    )
+                    .await;
+                    return Ok(callback);
                 }
             }
-
-            if let Some(error) = error {
-                let _ = respond(
-                    &mut socket,
-                    400,
-                    "Sign-in failed",
-                    &format!("The provider returned an error: {error}"),
-                )
-                .await;
-                return Err(AppError::Account(format!(
-                    "authorization denied by provider: {error}"
-                )));
-            }
-
-            let (Some(code), Some(state)) = (code, state) else {
-                let _ = respond(
-                    &mut socket,
-                    400,
-                    "Malformed callback",
-                    "The sign-in response was missing its code or state.",
-                )
-                .await;
-                continue;
-            };
-
-            // Reject a forged/duplicated callback before exchanging the code.
-            if state != expected_state {
-                let _ = respond(
-                    &mut socket,
-                    400,
-                    "State mismatch",
-                    "This sign-in attempt did not originate from SXMLAUNCHER.",
-                )
-                .await;
-                return Err(AppError::Account(
-                    "OAuth state mismatch; the callback did not match this sign-in attempt"
-                        .to_string(),
-                ));
-            }
-
-            let _ = respond(
-                &mut socket,
-                200,
-                "You can close this tab",
-                "SXMLAUNCHER is finishing your sign-in…",
-            )
-            .await;
-
-            return Ok(CallbackResult { code, state });
         }
     }
+}
+
+/// Bind `127.0.0.1` and, when the stack allows it, `[::1]` on the same port.
+///
+/// Windows resolves `localhost` to `::1` before `127.0.0.1`. A v4-only listener
+/// then makes the browser report that the callback page cannot be reached even
+/// though the sign-in itself succeeded.
+async fn bind_loopback(port: u16) -> AppResult<(Vec<TcpListener>, u16)> {
+    let v4 = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port)))
+        .await
+        .map_err(|err| {
+            AppError::Account(format!(
+                "cannot bind the sign-in callback on 127.0.0.1:{port} ({err}). \
+                 Another SXMLAUNCHER instance may already be listening there."
+            ))
+        })?;
+    let bound = v4
+        .local_addr()
+        .map_err(|err| AppError::Account(format!("cannot read loopback port: {err}")))?
+        .port();
+    let mut listeners = vec![v4];
+    match TcpListener::bind(SocketAddr::from((Ipv6Addr::LOCALHOST, bound))).await {
+        Ok(v6) => listeners.push(v6),
+        Err(err) => {
+            eprintln!("[auth] IPv6 callback listener on [::1]:{bound} did not bind ({err})");
+        }
+    }
+    Ok((listeners, bound))
+}
+
+async fn accept_next(
+    listeners: &[TcpListener],
+) -> std::io::Result<(tokio::net::TcpStream, SocketAddr)> {
+    let (result, _index, _rest) =
+        futures::future::select_all(listeners.iter().map(|listener| Box::pin(listener.accept())))
+            .await;
+    result
 }
 
 /// Minimal HTTP/1.1 response with a dark-styled landing page.
@@ -286,6 +380,8 @@ async fn respond(
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv6Addr;
+
     use super::*;
 
     #[test]
@@ -363,5 +459,95 @@ mod tests {
             .await
             .expect_err("must time out");
         assert!(error.to_string().contains("timed out"));
+    }
+
+    #[tokio::test]
+    async fn elyby_callback_path_is_accepted_and_bare_callback_is_not() {
+        let probe = LoopbackServer::bind().await.expect("probe");
+        let port = probe.port().expect("port");
+        drop(probe);
+
+        let redirect = format!("http://localhost:{port}/elyby/callback");
+        let server = LoopbackServer::bind_for_redirect(&redirect)
+            .await
+            .expect("bind elyby path");
+        assert_eq!(server.redirect_uri(), redirect);
+        assert_eq!(server.callback_path(), "/elyby/callback");
+        let port = server.port().expect("port");
+        let handle = tokio::spawn(async move { server.wait_for_code("expected-state").await });
+
+        // The old listener only answered `/callback`, so Ely.by's registered
+        // path came back as 404 and the sign-in timed out.
+        let mut noise = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .expect("connect");
+        noise
+            .write_all(b"GET /callback?code=nope&state=expected-state HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .expect("write");
+        let mut ignored = String::new();
+        noise.read_to_string(&mut ignored).await.expect("read");
+        assert!(ignored.contains("404"));
+
+        let mut client = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .expect("connect");
+        client
+            .write_all(
+                b"GET /elyby/callback?code=ely-code&state=expected-state HTTP/1.1\r\nHost: localhost\r\n\r\n",
+            )
+            .await
+            .expect("write");
+        let result = handle.await.expect("join").expect("callback");
+        assert_eq!(result.code, "ely-code");
+        assert_eq!(result.state, "expected-state");
+    }
+
+    #[test]
+    fn callback_query_reads_elyby_and_microsoft_error_names() {
+        let ely = parse_callback_query(
+            "/elyby/callback?error=access_denied&error_message=The+resource+owner+denied+the+request",
+        )
+        .expect("parse");
+        assert_eq!(
+            ely,
+            CallbackQuery::ProviderError(
+                "access_denied: The resource owner denied the request".into()
+            )
+        );
+
+        let live = parse_callback_query(
+            "ms-xal-00000000402b5328://auth?code=M.abc&state=state-1",
+        )
+        .expect("parse");
+        assert_eq!(
+            live,
+            CallbackQuery::Success(CallbackResult {
+                code: "M.abc".into(),
+                state: "state-1".into(),
+            })
+        );
+
+        let incomplete = parse_callback_query("/callback?code=only-code").expect("parse");
+        assert_eq!(incomplete, CallbackQuery::Incomplete);
+    }
+
+    #[tokio::test]
+    async fn ipv6_localhost_reaches_the_same_callback() {
+        let server = LoopbackServer::bind().await.expect("bind");
+        let port = server.port().expect("port");
+        let handle = tokio::spawn(async move { server.wait_for_code("expected-state").await });
+
+        let connect = tokio::net::TcpStream::connect((Ipv6Addr::LOCALHOST, port)).await;
+        let Ok(mut client) = connect else {
+            // This environment has no IPv6 loopback; the v4 listener is enough.
+            return;
+        };
+        client
+            .write_all(b"GET /callback?code=from-v6&state=expected-state HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .expect("write");
+        let result = handle.await.expect("join").expect("callback");
+        assert_eq!(result.code, "from-v6");
     }
 }

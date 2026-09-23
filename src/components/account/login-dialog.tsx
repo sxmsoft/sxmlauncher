@@ -30,10 +30,14 @@ type Tab = "microsoft" | "elyby" | "offline";
 /**
  * Sign-in for all three providers.
  *
- * Microsoft and Ely.by both use OAuth2 + PKCE against a loopback listener: we
- * open the system browser (never an embedded webview — that is what gets OAuth
- * apps blocked) and then wait for the redirect. Offline profiles need no
- * network at all and get a deterministic `OfflinePlayer:<name>` UUID.
+ * Microsoft (the public Minecraft client) and Ely.by both open the system
+ * browser on the provider's own login page — never an embedded webview, which
+ * is what gets OAuth apps blocked. Microsoft returns through its `ms-xal`
+ * callback. Ely.by's public desktop client has no redirect, so that button
+ * opens the Ely.by device-code page and the backend polls until it completes.
+ * A custom Ely.by web app (client secret set) still uses the loopback
+ * redirect. Offline profiles need no network and get a deterministic
+ * `OfflinePlayer:<name>` UUID.
  */
 export function LoginDialog({
   open,
@@ -72,7 +76,15 @@ export function LoginDialog({
   const startBrowserFlow = (provider: "microsoft" | "ely_by") => {
     begin.mutate(provider, {
       onSuccess: async (info) => {
-        await openExternal(info.authorizeUrl);
+        try {
+          await openExternal(info.authorizeUrl);
+        } catch (error) {
+          await cancelLogin();
+          const message = error instanceof Error ? error.message : String(error);
+          useLoginStore.getState().setError(message);
+          toast.error(error, "Could not open the sign-in page");
+          return;
+        }
         complete.mutate(info.loginId, { onSuccess: onSignedIn });
       },
     });
@@ -106,8 +118,8 @@ export function LoginDialog({
 
           <TabsContent value="microsoft" className="flex flex-col gap-3">
             <p className="text-muted-foreground text-xs leading-relaxed">
-              Opens your browser for the official Microsoft sign-in, then returns here.
-              Required for online multiplayer and Realms.
+              Opens the Microsoft “Sign in to Minecraft” page in your browser, then returns
+              here. Required for online multiplayer and Realms.
             </p>
             <Button
               onClick={() => startBrowserFlow("microsoft")}
@@ -126,8 +138,9 @@ export function LoginDialog({
 
           <TabsContent value="elyby" className="flex flex-col gap-4">
             <p className="text-muted-foreground text-xs leading-relaxed">
-              Ely.by accounts carry custom skins and capes. The launcher attaches the
-              Authlib endpoint to the JVM automatically.
+              Opens the Ely.by account page in your browser. Sign in and approve
+              SXMLAUNCHER there. Custom skins and capes are attached to the JVM
+              automatically.
             </p>
             <Button
               variant="outline"

@@ -18,15 +18,36 @@ use serde::{Deserialize, Serialize};
 use crate::error::{AppError, AppResult};
 use crate::models::account::{MinecraftUuid, SkinModel, SkinProfile, TokenSet};
 
-/// Public client id used by every third-party Minecraft launcher.
+/// Public client id used by the official Minecraft launcher.
+///
+/// This id is a legacy Microsoft account application. It is **not** registered
+/// in the Azure AD `consumers` tenant, and it does not allow `http://localhost`
+/// redirects (those pages render as an error, `HR=0x80049D57`, instead of
+/// "Sign in to Minecraft"). Its working redirects are
+/// [`MSA_LEGACY_REDIRECT_URI`] and `https://login.live.com/oauth20_desktop.srf`.
 pub const MSA_CLIENT_ID: &str = "00000000402b5328";
 /// `XboxLive.signin` grants the Xbox scopes; `offline_access` yields a refresh
 /// token (which is what lets us keep the player signed in).
+///
+/// Used only for a user-supplied Azure application. The public Minecraft client
+/// rejects this scope on the v2 endpoint and must use [`MSA_LEGACY_SCOPE`].
 pub const MSA_SCOPE: &str = "XboxLive.signin offline_access";
+/// Scope the public Minecraft client actually grants on `login.live.com`.
+pub const MSA_LEGACY_SCOPE: &str = "service::user.auth.xboxlive.com::MBI_SSL";
+/// Protocol redirect registered for the public Minecraft client.
+///
+/// The system browser follows this back to SXMLAUNCHER after the player signs
+/// in. `http://localhost` is not in the client's redirect list.
+pub const MSA_LEGACY_REDIRECT_URI: &str = "ms-xal-00000000402b5328://auth";
+/// URL scheme of [`MSA_LEGACY_REDIRECT_URI`].
+pub const MSA_LEGACY_SCHEME: &str = "ms-xal-00000000402b5328";
 
 const AUTHORIZE_URL: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize";
 const TOKEN_URL: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token";
 const DEVICE_CODE_URL: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode";
+const LEGACY_AUTHORIZE_URL: &str = "https://login.live.com/oauth20_authorize.srf";
+const LEGACY_TOKEN_URL: &str = "https://login.live.com/oauth20_token.srf";
+const LEGACY_DEVICE_CODE_URL: &str = "https://login.live.com/oauth20_connect.srf";
 const XBL_AUTHORIZE_URL: &str = "https://user.auth.xboxlive.com/user/authenticate";
 const XSTS_AUTHORIZE_URL: &str = "https://xsts.auth.xboxlive.com/xsts/authorize";
 const MC_LOGIN_URL: &str = "https://api.minecraftservices.com/authentication/login_with_xbox";
@@ -227,7 +248,40 @@ impl MicrosoftAuth {
         }
     }
 
+    /// `true` for the built-in Minecraft public client.
+    ///
+    /// That client uses the legacy Live endpoints. A user-supplied Azure app id
+    /// keeps the v2 + PKCE + `http://localhost` flow.
+    pub fn uses_minecraft_public_client(&self) -> bool {
+        self.client_id.eq_ignore_ascii_case(MSA_CLIENT_ID)
+    }
+
+    /// Authorize URL for the public Minecraft client.
+    ///
+    /// Lands on `login.live.com` with the title "Sign in to Minecraft". The v2
+    /// endpoint plus a localhost redirect renders an error page for this client.
+    pub fn legacy_authorize_url(&self, state: &str) -> AppResult<String> {
+        let mut url = url::Url::parse(LEGACY_AUTHORIZE_URL)?;
+        {
+            let mut query = url.query_pairs_mut();
+            query.append_pair("client_id", &self.client_id);
+            query.append_pair("response_type", "code");
+            query.append_pair("redirect_uri", MSA_LEGACY_REDIRECT_URI);
+            query.append_pair("scope", MSA_LEGACY_SCOPE);
+            query.append_pair("prompt", "select_account");
+            query.append_pair("state", state);
+            // Same flags the official launcher sends so the page offers the
+            // full consumer sign-up / account-picker form.
+            query.append_pair("lw", "1");
+        }
+        Ok(url.to_string())
+    }
+
     /// Build the authorize URL. `challenge` = PKCE S256 challenge.
+    ///
+    /// For a user-supplied Azure application that has registered
+    /// `http://localhost`. The public Minecraft client must use
+    /// [`Self::legacy_authorize_url`] instead.
     pub fn authorize_url(
         &self,
         redirect_uri: &str,
@@ -257,17 +311,23 @@ impl MicrosoftAuth {
         verifier: &str,
         redirect_uri: &str,
     ) -> AppResult<MsaTokenResponse> {
-        let params = [
+        let legacy = self.uses_minecraft_public_client();
+        let mut params = vec![
             ("client_id", self.client_id.as_str()),
             ("grant_type", "authorization_code"),
             ("code", code),
             ("redirect_uri", redirect_uri),
-            ("code_verifier", verifier),
-            ("scope", MSA_SCOPE),
+            (
+                "scope",
+                if legacy { MSA_LEGACY_SCOPE } else { MSA_SCOPE },
+            ),
         ];
+        if !legacy {
+            params.push(("code_verifier", verifier));
+        }
         let response = self
             .http
-            .post(TOKEN_URL)
+            .post(if legacy { LEGACY_TOKEN_URL } else { TOKEN_URL })
             .form(&params)
             .send()
             .await
@@ -286,13 +346,27 @@ impl MicrosoftAuth {
 
     /// Start the device-code grant.
     pub async fn begin_device_code(&self) -> AppResult<DeviceCodePrompt> {
-        let params = [
+        let legacy = self.uses_minecraft_public_client();
+        // The v2 device-code endpoint answers AADSTS700016 for the public
+        // Minecraft client ("application was not found"). `login.live.com`
+        // issues a code for that same client.
+        let mut params = vec![
             ("client_id", self.client_id.as_str()),
-            ("scope", MSA_SCOPE),
+            (
+                "scope",
+                if legacy { MSA_LEGACY_SCOPE } else { MSA_SCOPE },
+            ),
         ];
+        if legacy {
+            params.push(("response_type", "device_code"));
+        }
         let response = self
             .http
-            .post(DEVICE_CODE_URL)
+            .post(if legacy {
+                LEGACY_DEVICE_CODE_URL
+            } else {
+                DEVICE_CODE_URL
+            })
             .form(&params)
             .send()
             .await
@@ -345,7 +419,11 @@ impl MicrosoftAuth {
             ];
             let response = self
                 .http
-                .post(TOKEN_URL)
+                .post(if self.uses_minecraft_public_client() {
+                    LEGACY_TOKEN_URL
+                } else {
+                    TOKEN_URL
+                })
                 .form(&params)
                 .send()
                 .await
@@ -384,15 +462,19 @@ impl MicrosoftAuth {
 
     /// Refresh an MSA session using a stored refresh token.
     pub async fn refresh(&self, refresh_token: &str) -> AppResult<MsaTokenResponse> {
+        let legacy = self.uses_minecraft_public_client();
         let params = [
             ("client_id", self.client_id.as_str()),
             ("grant_type", "refresh_token"),
             ("refresh_token", refresh_token),
-            ("scope", MSA_SCOPE),
+            (
+                "scope",
+                if legacy { MSA_LEGACY_SCOPE } else { MSA_SCOPE },
+            ),
         ];
         let response = self
             .http
-            .post(TOKEN_URL)
+            .post(if legacy { LEGACY_TOKEN_URL } else { TOKEN_URL })
             .form(&params)
             .send()
             .await
@@ -421,7 +503,7 @@ impl MicrosoftAuth {
             "Properties": {
                 "AuthMethod": "RPS",
                 "SiteName": "user.auth.xboxlive.com",
-                "RpsTicket": format!("d={msa_access_token}")
+                "RpsTicket": xbox_rps_ticket(msa_access_token)
             },
             "RelyingParty": XBL_RELYING_PARTY,
             "TokenType": "JWT"
@@ -639,6 +721,19 @@ pub struct MsaLoginOutcome {
     pub tokens: TokenSet,
 }
 
+/// Xbox Live `RpsTicket` for an MSA access token.
+///
+/// Azure AD v2 tokens (JWTs, two dots) must be prefixed with `d=`. The legacy
+/// Minecraft Live token is an opaque RPS ticket; prefixing it makes Xbox reject
+/// the sign-in.
+pub fn xbox_rps_ticket(access_token: &str) -> String {
+    if access_token.matches('.').count() >= 2 {
+        format!("d={access_token}")
+    } else {
+        access_token.to_string()
+    }
+}
+
 /// Human-readable explanation for the XSTS `XErr` codes. Returns `None` for
 /// codes we do not know, so the caller can fall back to the raw body.
 pub fn xsts_error_message(code: u64) -> Option<&'static str> {
@@ -811,6 +906,37 @@ mod tests {
 
     fn auth() -> MicrosoftAuth {
         MicrosoftAuth::new(reqwest::Client::new())
+    }
+
+    #[test]
+    fn legacy_authorize_url_opens_the_minecraft_login_page() {
+        let url = auth().legacy_authorize_url("state-1").expect("url");
+        let parsed = url::Url::parse(&url).expect("parses");
+        assert_eq!(parsed.scheme(), "https");
+        assert_eq!(parsed.host_str(), Some("login.live.com"));
+        assert_eq!(parsed.path(), "/oauth20_authorize.srf");
+
+        let params: std::collections::HashMap<_, _> = parsed.query_pairs().collect();
+        assert_eq!(params.get("client_id").map(|v| v.as_ref()), Some(MSA_CLIENT_ID));
+        assert_eq!(
+            params.get("redirect_uri").map(|v| v.as_ref()),
+            Some(MSA_LEGACY_REDIRECT_URI)
+        );
+        assert_eq!(
+            params.get("scope").map(|v| v.as_ref()),
+            Some(MSA_LEGACY_SCOPE)
+        );
+        assert_eq!(params.get("state").map(|v| v.as_ref()), Some("state-1"));
+        assert!(params.get("code_challenge").is_none());
+    }
+
+    #[test]
+    fn xbox_ticket_prefix_follows_the_token_shape() {
+        assert_eq!(xbox_rps_ticket("EwAoOpaqueLiveToken"), "EwAoOpaqueLiveToken");
+        assert_eq!(
+            xbox_rps_ticket("header.payload.sig"),
+            "d=header.payload.sig"
+        );
     }
 
     #[test]

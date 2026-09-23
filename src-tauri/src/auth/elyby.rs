@@ -7,9 +7,11 @@
 //!    (`-javaagent:authlib-injector.jar=https://authserver.ely.by/api/authlib-injector`)
 //!    so the client talks to Ely.by instead of Mojang.
 //! 2. **OAuth2** (`account.ely.by`) — browser based, no password ever touches the
-//!    launcher. Token exchange requires the exact trio `client_id`,
-//!    `client_secret`, `redirect_uri`; anything else fails with `invalid_client`
-//!    ("uygulama bulunamadı" in the browser).
+//!    launcher. The public desktop client `sxmlauncher3` has no registered
+//!    redirect, so its browser flow is device code (`/code?user_code=`). A
+//!    custom web application exchanges an authorization code and must send the
+//!    exact trio `client_id`, `client_secret`, `redirect_uri`; a mismatched
+//!    redirect fails with `invalid_client`.
 //!
 //! Both produce a Minecraft-shaped session (`accessToken` + profile) so the rest
 //! of the launcher never needs to know which one was used.
@@ -91,6 +93,9 @@ struct ElyAuthErrorBody {
     error: Option<String>,
     #[serde(default)]
     error_message: Option<String>,
+    /// Device-code and token errors use `message` rather than `error_message`.
+    #[serde(default)]
+    message: Option<String>,
 }
 
 /// OAuth2 token response from Ely.by.
@@ -108,9 +113,38 @@ pub struct ElyOAuthTokens {
 
 impl ElyOAuthTokens {
     /// Expiry with a small safety margin, used for the vault entry.
+    ///
+    /// Ely.by's desktop clients sometimes omit `expires_in` (or send 0) for a
+    /// token the docs describe as valid for a day. Treat that as 24 hours so
+    /// the launcher does not immediately refresh a brand-new session.
     pub fn expires_at(&self) -> chrono::DateTime<Utc> {
-        Utc::now() + Duration::seconds(self.expires_in.max(60) - 60)
+        let seconds = if self.expires_in <= 0 {
+            86_400
+        } else {
+            self.expires_in
+        };
+        Utc::now() + Duration::seconds(seconds.max(60) - 60)
     }
+}
+
+/// Device-code grant issued for the public desktop client.
+#[derive(Debug, Clone)]
+pub struct ElyDeviceCode {
+    pub device_code: String,
+    pub user_code: String,
+    pub expires_in: i64,
+    pub interval: i64,
+}
+
+/// Browser page that starts the Ely.by sign-in for a device code.
+///
+/// The account site reads `user_code` from the query and continues into the
+/// real login form. The value Ely.by returns as `verification_uri` is `http://`,
+/// so this always uses `https://account.ely.by`.
+pub fn device_browser_url(user_code: &str) -> String {
+    let mut url = url::Url::parse("https://account.ely.by/code").expect("ely.by code page");
+    url.query_pairs_mut().append_pair("user_code", user_code);
+    url.to_string()
 }
 
 /// `GET account/v1/info` response.
@@ -206,7 +240,28 @@ impl ElyByAuth {
     /// Update the application credentials in place (Settings → Fixes).
     pub fn set_credentials(&mut self, client_id: String, client_secret: Option<String>) {
         self.client_id = client_id;
-        self.client_secret = client_secret;
+        self.client_secret = client_secret.filter(|secret| !secret.trim().is_empty());
+    }
+
+    pub fn client_id(&self) -> &str {
+        &self.client_id
+    }
+
+    pub fn client_secret(&self) -> Option<&str> {
+        self.client_secret.as_deref()
+    }
+
+    /// The historical `sxmlauncher3` application is a **desktop** client.
+    ///
+    /// Ely.by's validate API returns `invalid_client` ("Can not find application
+    /// you are trying to authorize") for every `redirect_uri`, including
+    /// `http://localhost:25564/elyby/callback`, and accepts the request only
+    /// when the redirect is omitted. Device code is the browser flow that
+    /// client allows, and it does not need a client secret. A configured secret
+    /// means the user registered their own web application, which uses the
+    /// authorization-code redirect instead.
+    pub fn browser_flow_is_device_code(&self) -> bool {
+        self.client_id == ELYBY_CLIENT_ID || self.client_secret.is_none()
     }
 
     /// Browser-based authorize URL.
@@ -243,13 +298,138 @@ impl ElyByAuth {
             params.push(("client_secret", secret.clone()));
         }
 
+        self.post_token(params, "Ely.by token request failed").await
+    }
+
+    /// Start the device-code grant used by the public desktop client.
+    pub async fn begin_device_code(&self) -> AppResult<ElyDeviceCode> {
+        let params = [
+            ("client_id", self.client_id.as_str()),
+            ("scope", ELYBY_SCOPE),
+        ];
+        let response = self
+            .http
+            .post("https://account.ely.by/api/oauth2/v1/devicecode")
+            .form(&params)
+            .send()
+            .await
+            .map_err(|err| AppError::Network(format!("Ely.by device code request failed: {err}")))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(AppError::Account(format!(
+                "Ely.by refused the device code request ({status}): {}",
+                summarize(&body)
+            )));
+        }
+
+        #[derive(Deserialize)]
+        struct Issued {
+            device_code: String,
+            user_code: String,
+            expires_in: i64,
+            #[serde(default = "default_interval")]
+            interval: i64,
+        }
+        fn default_interval() -> i64 {
+            5
+        }
+
+        let issued: Issued = response.json().await?;
+        Ok(ElyDeviceCode {
+            device_code: issued.device_code,
+            user_code: issued.user_code,
+            expires_in: issued.expires_in,
+            interval: issued.interval.max(1),
+        })
+    }
+
+    /// Poll until the player finishes the device-code sign-in on Ely.by.
+    pub async fn poll_device_code(&self, pending: &ElyDeviceCode) -> AppResult<ElyOAuthTokens> {
+        let deadline = tokio::time::Instant::now()
+            + std::time::Duration::from_secs(u64::try_from(pending.expires_in).unwrap_or(600));
+        let mut interval =
+            std::time::Duration::from_secs(u64::try_from(pending.interval).unwrap_or(5));
+
+        loop {
+            if tokio::time::Instant::now() >= deadline {
+                return Err(AppError::Account(
+                    "the Ely.by sign-in code expired before it was used".to_string(),
+                ));
+            }
+
+            let mut params = vec![
+                ("client_id", self.client_id.clone()),
+                (
+                    "grant_type",
+                    "urn:ietf:params:oauth:grant-type:device_code".to_string(),
+                ),
+                ("device_code", pending.device_code.clone()),
+            ];
+            if let Some(secret) = &self.client_secret {
+                params.push(("client_secret", secret.clone()));
+            }
+
+            let response = self
+                .http
+                .post(OAUTH_TOKEN_URL)
+                .form(&params)
+                .send()
+                .await
+                .map_err(|err| AppError::Network(format!("Ely.by device poll failed: {err}")))?;
+
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            if status.is_success() {
+                return serde_json::from_str::<ElyOAuthTokens>(&body).map_err(|err| {
+                    AppError::Account(format!("unexpected Ely.by device response: {err}"))
+                });
+            }
+
+            let code = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|value| value.get("error").and_then(|error| error.as_str()).map(str::to_string));
+            match code.as_deref() {
+                Some("authorization_pending") => {
+                    tokio::time::sleep(interval).await;
+                    continue;
+                }
+                Some("slow_down") => {
+                    interval += std::time::Duration::from_secs(5);
+                    tokio::time::sleep(interval).await;
+                    continue;
+                }
+                Some("expired_token") | Some("expired_user_code") => {
+                    return Err(AppError::Account(
+                        "the Ely.by sign-in code expired before it was used".to_string(),
+                    ))
+                }
+                Some("access_denied") => {
+                    return Err(AppError::Account("Ely.by sign-in was declined".to_string()))
+                }
+                _ => {
+                    return Err(AppError::Account(format!(
+                        "Ely.by device sign-in failed ({status}): {}",
+                        summarize(&body)
+                    )))
+                }
+            }
+        }
+    }
+
+    async fn post_token(
+        &self,
+        params: Vec<(&str, String)>,
+        context: &str,
+    ) -> AppResult<ElyOAuthTokens> {
         let response = self
             .http
             .post(OAUTH_TOKEN_URL)
             .form(&params)
             .send()
             .await
-            .map_err(|err| AppError::Network(format!("Ely.by token request failed: {err}")))?;
+            .map_err(|err| AppError::Network(format!("{context}: {err}")))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -524,8 +704,11 @@ fn decode_texture_property(value: &str) -> Option<DecodedTextures> {
 
 fn summarize(body: &str) -> String {
     if let Ok(parsed) = serde_json::from_str::<ElyAuthErrorBody>(body) {
-        if let Some(message) = parsed.error_message {
-            return message;
+        if let Some(message) = parsed.error_message.or(parsed.message) {
+            return match parsed.error {
+                Some(error) if !message.contains(&error) => format!("{error}: {message}"),
+                _ => message,
+            };
         }
         if let Some(error) = parsed.error {
             return error;
@@ -638,6 +821,53 @@ mod tests {
         assert!(url.contains("scope="));
         assert!(url.contains("state=state-1"));
         assert!(!url.contains("code_challenge"));
+    }
+
+    #[test]
+    fn device_browser_url_is_the_real_elyby_account_host() {
+        let url = device_browser_url("RCHPBBTK");
+        let parsed = url::Url::parse(&url).expect("url");
+        assert_eq!(parsed.scheme(), "https");
+        assert_eq!(parsed.host_str(), Some("account.ely.by"));
+        assert_eq!(parsed.path(), "/code");
+        assert_eq!(
+            parsed
+                .query_pairs()
+                .find(|(key, _)| key == "user_code")
+                .map(|(_, value)| value.into_owned())
+                .as_deref(),
+            Some("RCHPBBTK")
+        );
+        // The public desktop client rejects every redirect_uri. The page URL
+        // must not carry one or Ely.by shows "can not find application".
+        assert!(!url.contains("redirect_uri"));
+        assert!(!url.contains("sxmlauncher"));
+    }
+
+    #[test]
+    fn public_client_without_a_secret_uses_device_code() {
+        let auth = ElyByAuth::new(reqwest::Client::new(), "sxmlauncher3");
+        assert!(auth.browser_flow_is_device_code());
+        assert!(auth.client_secret().is_none());
+
+        let custom = ElyByAuth::with_secret(
+            reqwest::Client::new(),
+            "my-web-app",
+            "real-secret",
+        );
+        assert!(!custom.browser_flow_is_device_code());
+    }
+
+    #[test]
+    fn missing_oauth_expiry_lasts_a_day() {
+        let tokens = ElyOAuthTokens {
+            access_token: "a".into(),
+            refresh_token: None,
+            token_type: None,
+            expires_in: 0,
+        };
+        let lifetime = (tokens.expires_at() - Utc::now()).num_seconds();
+        assert!((86_280..=86_400).contains(&lifetime), "lifetime {lifetime}");
     }
 
     #[test]

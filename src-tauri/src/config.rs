@@ -227,7 +227,8 @@ pub struct AppSettings {
     pub msa_client_id: String,
     /// Ely.by OAuth application id.
     pub elyby_client_id: String,
-    /// Ely.by OAuth application secret (required by their token endpoint).
+    /// Ely.by OAuth secret. Only a custom web application needs one; the
+    /// public desktop client `sxmlauncher3` signs in without it.
     pub elyby_client_secret: Option<String>,
     /// Exact loopback redirect URI registered for the Ely.by application.
     pub elyby_redirect_uri: String,

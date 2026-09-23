@@ -14,7 +14,7 @@ Production Minecraft launcher desktop app: isolated instances, Microsoft & Ely.b
 | Area | What works |
 |------|------------|
 | **Instances** | Create/manage isolated instances (name, MC version, vanilla/Fabric/Quilt/Forge/NeoForge, memory, Java). Mojang installs; launch argv is `java [jvm args] MainClass [game args]`. |
-| **Auth** | Microsoft browser OAuth + device-code fallback (MSA → Xbox → XSTS → Minecraft). Ely.by username/password **and** browser OAuth with loopback `/elyby/callback`. Skins render in the UI (Ely.by skinsystem + Microsoft textures). Ely.by launches download **authlib-injector** from metadata JSON (BMCLAPI fallback) with sha256 verify. |
+| **Auth** | Microsoft browser sign-in on the real “Sign in to Minecraft” page (`login.live.com`, public client `00000000402b5328`, `ms-xal-` callback) plus a device-code fallback on `microsoft.com/link`. A custom Azure client id still uses PKCE + `http://localhost`. Ely.by username/password, and browser sign-in: the public desktop client `sxmlauncher3` opens `https://account.ely.by/code` (it rejects every redirect URI); a web app with `SXML_ELYBY_CLIENT_SECRET` uses loopback `http://localhost:25564/elyby/callback`. Skins render in the UI. Ely.by launches download **authlib-injector** with sha256 verify. |
 | **Modpacks** | Installing a Modrinth/CurseForge pack **creates its own instance** (game version + loader + mods). |
 | **Play modes** | Clear UI split: **Singleplayer** (Play offline world) vs **Multiplayer/Host**. Host starts from the launcher: pick instance → Host → integrated dedicated server + port probe + join code / P2P on `0.0.0.0`. |
 | **Jobs** | Progress events, cancelable downloads, clear errors. |
@@ -22,7 +22,7 @@ Production Minecraft launcher desktop app: isolated instances, Microsoft & Ely.b
 ## Prerequisites (Windows focus)
 
 - [Node.js 22+](https://nodejs.org/) and [pnpm 11+](https://pnpm.io/)
-- [Rust stable](https://rustup.rs/) (1.82+)
+- [Rust stable](https://rustup.rs/) (1.87+)
 - Windows: [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) (usually preinstalled)
 - Visual Studio Build Tools with C++ workload (for Tauri)
 
@@ -45,10 +45,10 @@ pnpm install
 
 | Variable | Purpose |
 |----------|---------|
-| `SXML_MSA_CLIENT_ID` | Optional Microsoft public client id (defaults to the documented Minecraft public client) |
-| `SXML_ELYBY_CLIENT_ID` | Ely.by OAuth public client id |
-| `SXML_ELYBY_CLIENT_SECRET` | Ely.by OAuth **secret** (required for browser OAuth; do not hardcode) |
-| `SXML_ELYBY_REDIRECT_URI` | Must match registration, default `http://localhost:25564/elyby/callback` |
+| `SXML_MSA_CLIENT_ID` | Optional. Default `00000000402b5328` uses the legacy Minecraft login page. A custom Azure app id switches to the v2 PKCE loopback and must allow `http://localhost` |
+| `SXML_ELYBY_CLIENT_ID` | Default `sxmlauncher3` (public desktop client, no redirect) |
+| `SXML_ELYBY_CLIENT_SECRET` | Only for your own Ely.by **web** application. Leave empty for `sxmlauncher3`. Never commit it |
+| `SXML_ELYBY_REDIRECT_URI` | Used only with a web application secret. Must match registration; default `http://localhost:25564/elyby/callback` |
 | `SXML_CURSEFORGE_API_KEY` | CurseForge Core API key |
 
 ## Develop

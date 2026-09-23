@@ -74,6 +74,11 @@
     "createUpdaterArtifacts": true
   },
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["ms-xal-00000000402b5328"]
+      }
+    },
     "updater": {
       "active": true,
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUyNTc3MjRDNjBDOEI1MTUKUldRVnRjaGdUSEpYNHZrUUZJUUpCYWNncU9BZm9uY1FCSHk3bFBLK1U2bXN5cVRMOUkrcXFJK3gK",

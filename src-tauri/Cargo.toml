@@ -2,7 +2,7 @@
 name = "sxmlauncher"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.87"
 description = "SXMLauncher — all-in-one Minecraft client, launcher, modpack manager and P2P server host"
 authors = ["SXMLauncher Contributors"]
 license = "MIT"
@@ -19,9 +19,11 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # --- Tauri shell + official plugins -------------------------------------
 tauri = { version = "2", features = ["macos-private-api", "tray-icon", "protocol-asset"] }
+tauri-plugin-deep-link = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
 tauri-plugin-os = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-store = "2"

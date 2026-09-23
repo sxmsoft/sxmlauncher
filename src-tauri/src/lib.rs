@@ -32,6 +32,20 @@ use crate::state::AppState;
 /// Build and run the desktop application.
 pub fn run() {
     tauri::Builder::default()
+        // Must be registered first. On Windows and Linux the Microsoft
+        // `ms-xal-` redirect starts a second process; this hands the URL to
+        // the instance that is waiting for it.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            for arg in argv {
+                crate::auth::deliver_oauth_callback(&arg);
+            }
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
+        .plugin(tauri_plugin_deep_link::init())
         // Plugins the UI calls directly (file pickers, opening folders, ...).
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -51,6 +65,38 @@ pub fn run() {
             // the setup hook so commands can never run against a half-built app.
             let state = tauri::async_runtime::block_on(AppState::initialize(&handle))?;
             app.manage(state);
+
+            // Register `ms-xal-00000000402b5328` so the system browser can
+            // return the Minecraft sign-in to this process. A cold start that
+            // was itself opened by that URL is handled from argv below.
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                app.deep_link().on_open_url(|event| {
+                    for url in event.urls() {
+                        crate::auth::deliver_oauth_callback(url.as_str());
+                    }
+                });
+                // The plugin records a cold-start URL before this hook runs, so
+                // the listener above misses it. Pull that URL out explicitly.
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    for url in urls {
+                        crate::auth::deliver_oauth_callback(url.as_str());
+                    }
+                }
+                // macOS registers the scheme in the bundle, and `register_all`
+                // returns unsupported there. Windows and Linux need the runtime
+                // registration so a dev build can receive `ms-xal-` too.
+                #[cfg(not(target_os = "macos"))]
+                if let Err(err) = app.deep_link().register_all() {
+                    eprintln!(
+                        "[auth] could not register the Microsoft sign-in callback ({err}). \
+                         Device-code sign-in still works."
+                    );
+                }
+            }
+            for arg in std::env::args().skip(1) {
+                crate::auth::deliver_oauth_callback(&arg);
+            }
 
             // Load the window only once state exists, so the first command the
             // UI issues always finds it.

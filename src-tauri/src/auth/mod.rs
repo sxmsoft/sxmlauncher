@@ -33,10 +33,10 @@ pub mod skin_upload;
 pub mod vault;
 
 pub use elyby::{
-    ElyByAuth, ElySession, AUTHLIB_INJECTOR_URL, ELYBY_CLIENT_ID, ELYBY_LOCAL_CLIENT, ELYBY_SCOPE,
+    ElyByAuth, ElyDeviceCode, ElySession, AUTHLIB_INJECTOR_URL, ELYBY_CLIENT_ID, ELYBY_SCOPE,
 };
-pub use msa::{DeviceCodePrompt, MicrosoftAuth, MsaLoginOutcome};
-pub use oauth::{CallbackResult, LoopbackServer, PkceCode};
+pub use msa::{DeviceCodePrompt, MicrosoftAuth, MsaLoginOutcome, MSA_LEGACY_REDIRECT_URI, MSA_LEGACY_SCHEME};
+pub use oauth::{CallbackQuery, CallbackResult, LoopbackServer, PkceCode};
 pub use offline::{create_offline_account, offline_identity, offline_uuid, validate_username};
 pub use vault::{account_key, select_vault, CredentialVault, KeyringVault, MemoryVault};
 
@@ -57,14 +57,126 @@ pub struct PendingLogin {
     pub redirect_uri: String,
     verifier: String,
     state: String,
-    server: LoopbackServer,
+    source: CallbackSource,
+}
+
+/// Where the authorization result comes back from.
+enum CallbackSource {
+    /// Custom Azure app, or an Ely.by web app with a registered redirect.
+    Loopback(LoopbackServer),
+    /// Public Minecraft client: the browser returns `ms-xal-...://auth`.
+    Protocol(ProtocolInbox),
+    /// Public Ely.by desktop client (`sxmlauncher3`): no redirect is registered.
+    ElyDevice(ElyDeviceCode),
+}
+
+/// In-process waiter for a protocol callback delivered by the OS.
+///
+/// The receiver sits behind a mutex because `PendingLogin` is stored in a
+/// `DashMap` (which requires `Sync`) between the begin and complete commands.
+/// `oneshot::Receiver` itself is not `Sync`.
+struct ProtocolInbox {
+    state: String,
+    rx: Mutex<Option<tokio::sync::oneshot::Receiver<AppResult<CallbackResult>>>>,
+}
+
+impl Drop for ProtocolInbox {
+    fn drop(&mut self) {
+        PROTOCOL_CALLBACKS.remove(&self.state);
+    }
+}
+
+/// Pending `ms-xal-` callbacks, keyed by the OAuth `state`.
+static PROTOCOL_CALLBACKS: std::sync::LazyLock<
+    DashMap<String, tokio::sync::oneshot::Sender<AppResult<CallbackResult>>>,
+> = std::sync::LazyLock::new(DashMap::new);
+
+/// Hand a protocol URL from the OS (`ms-xal-00000000402b5328://auth?code=...`)
+/// to the sign-in that is waiting for it.
+///
+/// Called from the single-instance / deep-link hooks. URLs that are not this
+/// sign-in are ignored.
+pub fn deliver_oauth_callback(raw: &str) {
+    let Ok(url) = url::Url::parse(raw.trim()) else {
+        return;
+    };
+    if !url.scheme().eq_ignore_ascii_case(MSA_LEGACY_SCHEME) {
+        return;
+    }
+    let state = url
+        .query_pairs()
+        .find(|(key, _)| key == "state")
+        .map(|(_, value)| value.into_owned());
+    let Some(state) = state else {
+        return;
+    };
+    let Some((_, sender)) = PROTOCOL_CALLBACKS.remove(&state) else {
+        return;
+    };
+    let parsed = oauth::parse_callback_query(raw);
+    let _ = sender.send(match parsed {
+        Ok(CallbackQuery::Success(callback)) => Ok(callback),
+        Ok(CallbackQuery::ProviderError(error)) => Err(AppError::Account(format!(
+            "authorization denied by provider: {error}"
+        ))),
+        Ok(CallbackQuery::Incomplete) => Err(AppError::Account(
+            "the Microsoft callback was missing its authorization code".to_string(),
+        )),
+        Err(err) => Err(err),
+    });
+}
+
+fn register_protocol_waiter(state: String) -> ProtocolInbox {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    PROTOCOL_CALLBACKS.insert(state.clone(), tx);
+    ProtocolInbox {
+        state,
+        rx: Mutex::new(Some(rx)),
+    }
 }
 
 impl PendingLogin {
     /// Wait for the browser redirect and return the authorization code.
     async fn wait_for_code(self) -> AppResult<String> {
-        let callback = self.server.wait_for_code(&self.state).await?;
-        Ok(callback.code)
+        let expected = self.state.clone();
+        match self.source {
+            CallbackSource::Loopback(server) => {
+                let callback = server.wait_for_code(&expected).await?;
+                Ok(callback.code)
+            }
+            CallbackSource::Protocol(inbox) => {
+                let rx = inbox.rx.lock().take().ok_or_else(|| {
+                    AppError::Account(
+                        "the Microsoft sign-in callback was already consumed".to_string(),
+                    )
+                })?;
+                let callback = tokio::time::timeout(oauth::CALLBACK_TIMEOUT, rx)
+                    .await
+                    .map_err(|_| {
+                        AppError::Account(
+                            "timed out waiting for Microsoft to return to SXMLAUNCHER. If the \
+                             official Minecraft launcher is also installed it may have claimed \
+                             the ms-xal callback; use the device-code sign-in instead."
+                                .to_string(),
+                        )
+                    })?
+                    .map_err(|_| {
+                        AppError::Account(
+                            "the Microsoft sign-in was cancelled before it finished".to_string(),
+                        )
+                    })??;
+                if callback.state != expected {
+                    return Err(AppError::Account(
+                        "OAuth state mismatch; the callback did not match this sign-in attempt"
+                            .to_string(),
+                    ));
+                }
+                Ok(callback.code)
+            }
+            CallbackSource::ElyDevice(_) => Err(AppError::Account(
+                "this Ely.by sign-in does not use an authorization code".to_string(),
+            )),
+        }
     }
 }
 
@@ -165,13 +277,13 @@ impl AccountManager {
             db,
             vault,
             msa: MicrosoftAuth::with_client_id(http.clone(), config.msa_client_id),
-            elyby: ElyByAuth::with_secret(
-                http,
-                config.elyby_client_id,
-                config
-                    .elyby_client_secret
-                    .unwrap_or_else(|| ELYBY_LOCAL_CLIENT.to_string()),
-            ),
+            // `ELYBY_LOCAL_CLIENT` is the Authlib client token, not an OAuth
+            // secret. Substituting it makes every token exchange fail with
+            // `invalid_client`. A missing secret stays missing.
+            elyby: match config.elyby_client_secret.filter(|secret| !secret.trim().is_empty()) {
+                Some(secret) => ElyByAuth::with_secret(http, config.elyby_client_id, secret),
+                None => ElyByAuth::new(http, config.elyby_client_id),
+            },
             elyby_redirect_uri: config.elyby_redirect_uri,
             active: Mutex::new(None),
             refreshes: DashMap::new(),
@@ -260,10 +372,23 @@ impl AccountManager {
         self.finalize_login(outcome).await
     }
 
-    /// Begin the Microsoft loopback sign-in: returns the URL to open.
+    /// Begin the Microsoft browser sign-in: returns the URL to open.
     pub async fn begin_msa_login(&self) -> AppResult<PendingLogin> {
-        let pkce = PkceCode::generate()?;
         let state = oauth::random_state();
+        if self.msa.uses_minecraft_public_client() {
+            let authorize_url = self.msa.legacy_authorize_url(&state)?;
+            return Ok(PendingLogin {
+                login_id: Uuid::new_v4(),
+                provider: AccountProvider::Microsoft,
+                authorize_url,
+                redirect_uri: MSA_LEGACY_REDIRECT_URI.to_string(),
+                verifier: String::new(),
+                state: state.clone(),
+                source: CallbackSource::Protocol(register_protocol_waiter(state)),
+            });
+        }
+
+        let pkce = PkceCode::generate()?;
         let server = LoopbackServer::bind().await?;
         let authorize_url = self
             .msa
@@ -276,7 +401,7 @@ impl AccountManager {
             redirect_uri: server.redirect_uri().to_string(),
             verifier: pkce.verifier,
             state,
-            server,
+            source: CallbackSource::Loopback(server),
         })
     }
 
@@ -322,29 +447,32 @@ impl AccountManager {
         .await
     }
 
-    /// The port Ely.by's callback listener must bind.
-    fn elyby_redirect_port(&self) -> u16 {
-        url::Url::parse(&self.elyby_redirect_uri)
-            .ok()
-            .and_then(|url| url.port_or_known_default())
-            .unwrap_or(0)
-    }
-
-    /// Begin the Ely.by OAuth sign-in.
+    /// Begin the Ely.by browser sign-in.
     ///
-    /// The loopback listener binds the port encoded in the configured redirect
-    /// URI, because Ely.by compares `redirect_uri` exactly — a random port would
-    /// produce their "can not find application you are trying to authorize"
-    /// page even with a correct client id.
+    /// The public desktop client `sxmlauncher3` has no registered redirect, so
+    /// an authorize URL that includes `redirect_uri` is rejected before the
+    /// login form ("Can not find application you are trying to authorize").
+    /// That client uses the device-code page on `account.ely.by`, which is the
+    /// real account login. A user-supplied web application (client id + secret
+    /// + exact redirect) keeps the loopback authorization-code flow.
     pub async fn begin_elyby_login(&self) -> AppResult<PendingLogin> {
+        if self.elyby.browser_flow_is_device_code() {
+            let issued = self.elyby.begin_device_code().await?;
+            let authorize_url = elyby::device_browser_url(&issued.user_code);
+            return Ok(PendingLogin {
+                login_id: Uuid::new_v4(),
+                provider: AccountProvider::ElyBy,
+                authorize_url,
+                redirect_uri: String::new(),
+                verifier: String::new(),
+                state: String::new(),
+                source: CallbackSource::ElyDevice(issued),
+            });
+        }
+
         let state = oauth::random_state();
-        let port = self.elyby_redirect_port();
-        let server = LoopbackServer::bind_on(port).await?;
-        let redirect_uri = if port == 0 {
-            server.redirect_uri().to_string()
-        } else {
-            self.elyby_redirect_uri.clone()
-        };
+        let server = LoopbackServer::bind_for_redirect(&self.elyby_redirect_uri).await?;
+        let redirect_uri = self.elyby_redirect_uri.clone();
         let authorize_url = self.elyby.authorize_url(&redirect_uri, &state)?;
 
         Ok(PendingLogin {
@@ -354,16 +482,30 @@ impl AccountManager {
             redirect_uri,
             verifier: String::new(),
             state,
-            server,
+            source: CallbackSource::Loopback(server),
         })
     }
 
     /// Finish the Ely.by OAuth sign-in.
     pub async fn complete_elyby_login(&self, pending: PendingLogin) -> AppResult<AccountSummary> {
-        let redirect_uri = pending.redirect_uri.clone();
-        let code = pending.wait_for_code().await?;
-
-        let tokens = self.elyby.exchange_code(&code, &redirect_uri).await?;
+        let PendingLogin {
+            redirect_uri,
+            state,
+            source,
+            ..
+        } = pending;
+        let tokens = match source {
+            CallbackSource::ElyDevice(device) => self.elyby.poll_device_code(&device).await?,
+            CallbackSource::Loopback(server) => {
+                let callback = server.wait_for_code(&state).await?;
+                self.elyby.exchange_code(&callback.code, &redirect_uri).await?
+            }
+            CallbackSource::Protocol(_) => {
+                return Err(AppError::Account(
+                    "Ely.by sign-in does not use the Microsoft protocol callback".to_string(),
+                ))
+            }
+        };
         // With `minecraft_server_session` the OAuth access token *is* the
         // Minecraft session, and `account/v1/info` carries the profile.
         let session = self.elyby.session_from_oauth(&tokens).await?;
@@ -866,27 +1008,83 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn msa_login_url_targets_microsoft_with_pkce() {
+    async fn msa_public_client_opens_the_live_login_page() {
         let manager = manager();
         let pending = manager.begin_msa_login().await.expect("begin");
-        assert!(pending.authorize_url.contains("login.microsoftonline.com"));
-        assert!(pending.authorize_url.contains("code_challenge="));
-        // `localhost`, not `127.0.0.1`: Microsoft rejects loopback redirects that
-        // are not registered as `http://localhost`.
-        assert!(pending.redirect_uri.starts_with("http://localhost:"));
+        assert!(pending
+            .authorize_url
+            .starts_with("https://login.live.com/oauth20_authorize.srf?"));
+        assert!(pending.authorize_url.contains("client_id=00000000402b5328"));
+        assert!(pending
+            .authorize_url
+            .contains("redirect_uri=ms-xal-00000000402b5328"));
+        assert!(!pending.authorize_url.contains("code_challenge"));
+        assert!(!pending.authorize_url.contains("localhost"));
+        assert_eq!(pending.redirect_uri, MSA_LEGACY_REDIRECT_URI);
         assert_eq!(pending.provider, AccountProvider::Microsoft);
     }
 
     #[tokio::test]
-    async fn elyby_login_url_uses_the_injector_client() {
+    async fn custom_msa_client_keeps_the_pkce_loopback() {
+        let db = Database::open_in_memory().expect("db");
+        let mut config = ProviderConfig::default();
+        config.msa_client_id = "11111111-2222-3333-4444-555555555555".into();
+        let manager =
+            AccountManager::new_with_config(db, Arc::new(MemoryVault::new()), config);
+        let pending = manager.begin_msa_login().await.expect("begin");
+        assert!(pending.authorize_url.contains("login.microsoftonline.com"));
+        assert!(pending.authorize_url.contains("code_challenge="));
+        assert!(pending.redirect_uri.starts_with("http://localhost:"));
+        assert!(pending.redirect_uri.ends_with("/callback"));
+    }
+
+    #[tokio::test]
+    async fn protocol_callback_returns_only_the_matching_state() {
         let manager = manager();
+        let pending = manager.begin_msa_login().await.expect("begin");
+        let state = pending.state.clone();
+
+        deliver_oauth_callback("ms-xal-00000000402b5328://auth?code=attacker&state=other");
+        deliver_oauth_callback(&format!(
+            "ms-xal-00000000402b5328://auth?code=good-code&state={state}"
+        ));
+
+        let code = pending.wait_for_code().await.expect("code");
+        assert_eq!(code, "good-code");
+    }
+
+    #[tokio::test]
+    async fn protocol_callback_surfaces_a_provider_error() {
+        let manager = manager();
+        let pending = manager.begin_msa_login().await.expect("begin");
+        let state = pending.state.clone();
+        deliver_oauth_callback(&format!(
+            "ms-xal-00000000402b5328://auth?error=access_denied&error_description=nope&state={state}"
+        ));
+        let error = pending.wait_for_code().await.expect_err("denied");
+        assert!(error.to_string().contains("access_denied"));
+        assert!(error.to_string().contains("nope"));
+    }
+
+    #[tokio::test]
+    async fn elyby_web_app_uses_the_exact_registered_redirect() {
+        let db = Database::open_in_memory().expect("db");
+        let mut config = ProviderConfig::default();
+        config.elyby_client_id = "my-web-app".into();
+        config.elyby_client_secret = Some("not-a-real-secret".into());
+        config.elyby_redirect_uri = "http://localhost:25564/elyby/callback".into();
+        let manager =
+            AccountManager::new_with_config(db, Arc::new(MemoryVault::new()), config);
         let pending = manager.begin_elyby_login().await.expect("begin");
-        assert!(pending.authorize_url.contains("account.ely.by"));
-        assert!(pending.authorize_url.contains("client_id=sxmlauncher3"));
-        // The callback binds the port encoded in the configured redirect URI,
-        // which is what makes Ely.by's exact-match check pass.
-        assert!(pending.redirect_uri.starts_with("http://localhost:25564/"));
+        assert!(pending
+            .authorize_url
+            .starts_with("https://account.ely.by/oauth2/v1?"));
+        assert!(pending.authorize_url.contains("client_id=my-web-app"));
+        assert!(pending.authorize_url.contains("25564"));
+        assert!(pending.authorize_url.contains("elyby"));
+        assert_eq!(pending.redirect_uri, "http://localhost:25564/elyby/callback");
         assert_eq!(pending.provider, AccountProvider::ElyBy);
+        assert!(!pending.authorize_url.contains("code_challenge"));
     }
 
     #[tokio::test]
