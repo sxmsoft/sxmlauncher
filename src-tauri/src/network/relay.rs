@@ -36,6 +36,10 @@ pub const RELAY_PROTOCOL: u8 = 1;
 const MAX_HANDSHAKE_BYTES: usize = 8 * 1024;
 /// How long to wait for the relay's response.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+/// DNS for the relay must not block the async runtime. Windows can sit on a
+/// dead resolver for about 90 seconds, which is what left guests on
+/// "Opening a direct tunnel".
+const RESOLVE_TIMEOUT: Duration = Duration::from_secs(4);
 
 /// Handshake sent to the relay.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,21 +88,16 @@ impl RelayTransport {
     pub fn new(default_relay: Option<String>) -> Self {
         Self { default_relay }
     }
-}
 
-#[async_trait]
-impl Transport for RelayTransport {
-    fn kind(&self) -> &'static str {
-        "relay-tcp"
-    }
-
-    fn mode(&self) -> ConnectionMode {
-        ConnectionMode::Relay
-    }
-
-    async fn connect(
+    /// Dial the relay as `role`.
+    ///
+    /// Progress is reported before DNS. Lookup runs on a blocking thread and
+    /// gives up after [`RESOLVE_TIMEOUT`], so a strict-NAT join cannot sit on
+    /// Connecting while `to_socket_addrs` waits out the OS resolver.
+    pub async fn connect_as(
         &self,
         descriptor: &ConnectionDescriptor,
+        role: RelayRole,
         sink: Arc<dyn ProgressSink>,
     ) -> AppResult<ConnectedPeer> {
         let relay = descriptor
@@ -119,45 +118,68 @@ impl Transport for RelayTransport {
                 )
             })?;
 
+        let strict = descriptor.mode == ConnectionMode::Relay;
+        let label = match role {
+            RelayRole::Host => "Opening host relay session",
+            RelayRole::Guest if strict => "Strict NAT: connecting through the relay",
+            RelayRole::Guest => "Connecting through the relay",
+        };
+        let stage = if role == RelayRole::Host {
+            JobStage::Registering
+        } else {
+            JobStage::ConnectingP2p
+        };
+        let kind = if role == RelayRole::Host {
+            JobKind::P2pHost
+        } else {
+            JobKind::P2pConnect
+        };
         sink.report(
-            ProgressEvent::started(JobKind::P2pConnect, "Connecting through the relay")
-                .stage(JobStage::ConnectingP2p)
+            ProgressEvent::started(kind, label)
+                .stage(stage)
                 .detail(&relay.url),
         )
         .await;
 
-        let address = parse_relay_address(&relay.url)?;
+        let address = resolve_relay_address(&relay.url).await?;
         let started = Instant::now();
         let mut socket = tokio::time::timeout(HANDSHAKE_TIMEOUT, TcpStream::connect(address))
             .await
             .map_err(|_| {
-                AppError::Transport(format!("the relay at {address} did not accept a connection"))
+                AppError::Transport(format!(
+                    "JOIN_UNREACHABLE: the relay at {address} did not accept a connection"
+                ))
             })?
-            .map_err(|err| AppError::Transport(format!("cannot reach the relay: {err}")))?;
+            .map_err(|err| {
+                AppError::Transport(format!("JOIN_UNREACHABLE: cannot reach the relay: {err}"))
+            })?;
 
         // Keep-alive so a NAT middlebox does not silently drop an idle session.
         let _ = socket.set_nodelay(true);
 
         let hello = RelayHello {
             protocol: RELAY_PROTOCOL,
-            role: RelayRole::Guest,
+            role,
             peer_id: descriptor.peer_id.clone(),
             room_token: relay.room_token.clone(),
             session_token: descriptor.session_token.clone(),
             protocol_version: descriptor.protocol_version,
         };
 
-        let response = tokio::time::timeout(
-            HANDSHAKE_TIMEOUT,
-            handshake(&mut socket, &hello),
-        )
-        .await
-        .map_err(|_| AppError::Transport("the relay did not answer the handshake".to_string()))??;
+        let response = tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake(&mut socket, &hello))
+            .await
+            .map_err(|_| {
+                AppError::Transport(
+                    "JOIN_UNREACHABLE: the relay did not answer the handshake".to_string(),
+                )
+            })??;
 
         if !response.ok {
-            return Err(AppError::Transport(response.error.unwrap_or_else(|| {
-                "the relay refused this session".to_string()
-            })));
+            return Err(AppError::Transport(
+                response
+                    .error
+                    .unwrap_or_else(|| "the relay refused this session".to_string()),
+            ));
         }
 
         let rtt_ms = Some(started.elapsed().as_millis() as u32);
@@ -170,23 +192,41 @@ impl Transport for RelayTransport {
             cancel: CancellationToken::new(),
         })
     }
+}
+
+#[async_trait]
+impl Transport for RelayTransport {
+    fn kind(&self) -> &'static str {
+        "relay-tcp"
+    }
+
+    fn mode(&self) -> ConnectionMode {
+        ConnectionMode::Relay
+    }
+
+    async fn connect(
+        &self,
+        descriptor: &ConnectionDescriptor,
+        sink: Arc<dyn ProgressSink>,
+    ) -> AppResult<ConnectedPeer> {
+        self.connect_as(descriptor, RelayRole::Guest, sink).await
+    }
 
     async fn probe(&self, descriptor: &ConnectionDescriptor) -> AppResult<Option<u32>> {
         // Build an owned descriptor: borrowing a temporary here would not live
         // long enough to use it below.
-        let relay: Option<RelayDescriptor> =
-            descriptor.relay.clone().or_else(|| {
-                self.default_relay.as_ref().map(|url| RelayDescriptor {
-                    url: url.clone(),
-                    room_token: String::new(),
-                    region: None,
-                    cert_fingerprint: None,
-                })
-            });
+        let relay: Option<RelayDescriptor> = descriptor.relay.clone().or_else(|| {
+            self.default_relay.as_ref().map(|url| RelayDescriptor {
+                url: url.clone(),
+                room_token: String::new(),
+                region: None,
+                cert_fingerprint: None,
+            })
+        });
         let Some(relay) = relay else {
             return Ok(None);
         };
-        let address = parse_relay_address(&relay.url)?;
+        let address = resolve_relay_address(&relay.url).await?;
         let started = Instant::now();
         let socket = tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(address))
             .await
@@ -235,10 +275,32 @@ pub async fn handshake(socket: &mut TcpStream, hello: &RelayHello) -> AppResult<
         .map_err(|err| AppError::Transport(format!("unreadable relay response: {err}")))
 }
 
+/// Resolve a relay URL without blocking the async runtime.
+pub async fn resolve_relay_address(url: &str) -> AppResult<std::net::SocketAddr> {
+    let url = url.to_string();
+    match tokio::time::timeout(
+        RESOLVE_TIMEOUT,
+        tokio::task::spawn_blocking(move || parse_relay_address(&url)),
+    )
+    .await
+    {
+        Ok(Ok(result)) => result,
+        Ok(Err(err)) => Err(AppError::Transport(format!(
+            "JOIN_UNREACHABLE: relay lookup failed: {err}"
+        ))),
+        Err(_) => Err(AppError::Transport(
+            "JOIN_UNREACHABLE: the relay address did not resolve before the timeout".to_string(),
+        )),
+    }
+}
+
 /// Extract a dialable `SocketAddr` from a relay URL.
 ///
 /// Accepts `ws://`, `wss://`, `tcp://` and bare `host:port`. `wss` defaults to
 /// 443 because the production relay terminates TLS in front of the raw tunnel.
+///
+/// This performs blocking DNS. Callers on the async runtime must use
+/// [`resolve_relay_address`] instead.
 pub fn parse_relay_address(url: &str) -> AppResult<std::net::SocketAddr> {
     let trimmed = url.trim();
     let without_scheme = trimmed
@@ -272,11 +334,15 @@ mod tests {
     #[test]
     fn relay_urls_parse_with_and_without_schemes() {
         assert_eq!(
-            parse_relay_address("tcp://127.0.0.1:9000").expect("addr").to_string(),
+            parse_relay_address("tcp://127.0.0.1:9000")
+                .expect("addr")
+                .to_string(),
             "127.0.0.1:9000"
         );
         assert_eq!(
-            parse_relay_address("127.0.0.1:9000").expect("addr").to_string(),
+            parse_relay_address("127.0.0.1:9000")
+                .expect("addr")
+                .to_string(),
             "127.0.0.1:9000"
         );
         // wss defaults to 443, ws to 80.
@@ -285,7 +351,10 @@ mod tests {
             parse_relay_address("wss://127.0.0.1").expect("addr").port(),
             443
         );
-        assert_eq!(parse_relay_address("ws://127.0.0.1").expect("addr").port(), 80);
+        assert_eq!(
+            parse_relay_address("ws://127.0.0.1").expect("addr").port(),
+            80
+        );
         // A path must be ignored.
         assert_eq!(
             parse_relay_address("wss://127.0.0.1:9443/session")
@@ -339,6 +408,58 @@ mod tests {
         let received = server.await.expect("join");
         assert_eq!(received.protocol, RELAY_PROTOCOL);
         assert_eq!(received.protocol_version, 763);
+    }
+
+    #[tokio::test]
+    async fn host_role_is_what_the_relay_sees() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("addr");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut length_bytes = [0u8; 4];
+            socket.read_exact(&mut length_bytes).await.expect("length");
+            let mut payload = vec![0u8; u32::from_be_bytes(length_bytes) as usize];
+            socket.read_exact(&mut payload).await.expect("payload");
+            let hello: RelayHello = serde_json::from_slice(&payload).expect("hello");
+            let response = RelayResponse {
+                ok: true,
+                error: None,
+                observed_address: None,
+                region: None,
+            };
+            let body = serde_json::to_vec(&response).expect("encode");
+            socket
+                .write_all(&(body.len() as u32).to_be_bytes())
+                .await
+                .expect("write length");
+            socket.write_all(&body).await.expect("write body");
+            hello.role
+        });
+
+        let transport = RelayTransport::new(None);
+        let descriptor = ConnectionDescriptor {
+            mode: ConnectionMode::Relay,
+            peer_id: "host".into(),
+            public_key: "key".into(),
+            endpoints: vec![],
+            relay: Some(RelayDescriptor {
+                url: format!("tcp://{address}"),
+                room_token: "room".into(),
+                region: None,
+                cert_fingerprint: None,
+            }),
+            session_token: "token".into(),
+            protocol_version: 767,
+        };
+        transport
+            .connect_as(
+                &descriptor,
+                RelayRole::Host,
+                std::sync::Arc::new(crate::models::progress::NoopProgressSink),
+            )
+            .await
+            .expect("host session");
+        assert_eq!(server.await.expect("role"), RelayRole::Host);
     }
 
     #[tokio::test]

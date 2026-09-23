@@ -15,9 +15,9 @@
 //!
 //! ```text
 //! 1. resolve the listing (by id, or by share code)
-//! 2. connect: direct UDP tunnel, falling back to the relay
+//! 2. connect: a short direct attempt, then the relay when the host is strict NAT
 //! 3. bind a loopback port and start the bridge
-//! 4. return that address so the launcher can pass --server/--port
+//! 4. return that address so the launcher can pass `--quickPlayMultiplayer`
 //! ```
 
 use std::collections::HashMap;
@@ -40,7 +40,9 @@ use crate::models::server::{
     DEFAULT_HEARTBEAT_TTL_SECS, HEARTBEAT_INTERVAL_SECS,
 };
 use crate::network::bridge::{self, DEFAULT_SERVER_PORT};
-use crate::network::code::{matches_share_code_pattern, normalize_share_code, CodeFlags, ConnectCode};
+use crate::network::code::{
+    matches_share_code_pattern, normalize_share_code, CodeFlags, ConnectCode,
+};
 use crate::network::directory::{Directory, InviteLookup};
 use crate::network::holepunch::{
     self, decode_punch, encode_punch, NatBehavior, PunchConfig, PunchKind, PUNCH_DATAGRAM_LEN,
@@ -610,7 +612,45 @@ impl SessionManager {
             _heartbeat: heartbeat,
         });
 
-        // 7. Session demux: the single reader of the punch socket. It answers
+        // Strict NAT (or an explicit relay) publishes a relay room. Dial it as
+        // the host so a guest that falls back has a peer to handshake with.
+        // Hosting still returns the share code if the relay is down; the guest
+        // then gets JOIN_UNREACHABLE instead of an endless Connecting row.
+        let relay_plan = {
+            let listing = session.listing.read();
+            (listing.connection.mode, listing.connection.clone())
+        };
+        if relay_plan.0 == ConnectionMode::Relay {
+            if relay_plan.1.relay.is_some() {
+                let relay = self.transports.relay().clone();
+                let relay_session = session.clone();
+                let relay_sink = sink.clone();
+                let relay_cancel = cancel.clone();
+                let local_server = options.local_server;
+                tokio::spawn(async move {
+                    run_host_relay(
+                        relay,
+                        relay_plan.1,
+                        local_server,
+                        relay_session,
+                        relay_sink,
+                        relay_cancel,
+                    )
+                    .await;
+                });
+            } else {
+                sink.report(
+                    ProgressEvent::started(JobKind::P2pHost, "Strict NAT and no relay")
+                        .stage(JobStage::Failed)
+                        .failed(
+                            "JOIN_UNREACHABLE: this network cannot punch and no relay URL is configured",
+                        ),
+                )
+                .await;
+            }
+        }
+
+        // Session demux: the single reader of the punch socket. It answers
         // punches, verifies tunnel handshakes and routes established guests'
         // frames to their tunnel task (see `run_host_demux`).
         if let Some(socket) = punch_socket {
@@ -748,11 +788,28 @@ impl SessionManager {
         {
             Ok(peer) => peer,
             Err(err) => {
-                let message = err.to_string();
-                if message.contains("JOIN_UNREACHABLE") || message.contains("INVITE_") {
+                let raw = err.to_string();
+                let message = if raw.contains("JOIN_UNREACHABLE") || raw.contains("INVITE_") {
+                    raw
+                } else {
+                    format!("JOIN_UNREACHABLE: {raw}")
+                };
+                // Finish the Connecting rows. A newer failed snapshot is what
+                // Activity keeps; Minecraft is not launched on this path.
+                sink.report(
+                    ProgressEvent::started(
+                        JobKind::P2pConnect,
+                        format!("Could not join {}", listing.name),
+                    )
+                    .stage(JobStage::Failed)
+                    .detail(&message)
+                    .failed(message.clone()),
+                )
+                .await;
+                if message == err.to_string() {
                     return Err(err);
                 }
-                return Err(AppError::Transport(format!("JOIN_UNREACHABLE: {message}")));
+                return Err(AppError::Transport(message));
             }
         };
         let mode = peer.mode;
@@ -881,6 +938,85 @@ impl SessionManager {
             session.value().cancel.cancel();
         }
         self.guests.clear();
+    }
+}
+
+/// Keep a relay room open while a strict-NAT host is published.
+///
+/// Each accepted pipe is one guest. The loop redials after the guest leaves
+/// so the next friend can join the same share code.
+async fn run_host_relay(
+    relay: Arc<crate::network::relay::RelayTransport>,
+    descriptor: ConnectionDescriptor,
+    local_server: SocketAddr,
+    session: Arc<HostSession>,
+    sink: Arc<dyn ProgressSink>,
+    cancel: CancellationToken,
+) {
+    loop {
+        if cancel.is_cancelled() {
+            break;
+        }
+        let attempt = relay.connect_as(
+            &descriptor,
+            crate::network::relay::RelayRole::Host,
+            sink.clone(),
+        );
+        tokio::pin!(attempt);
+        let connected = tokio::select! {
+            _ = cancel.cancelled() => break,
+            result = &mut attempt => result,
+        };
+        match connected {
+            Ok(peer) => {
+                sink.report(
+                    ProgressEvent::started(JobKind::P2pHost, "Relay session open")
+                        .stage(JobStage::Running)
+                        .detail("Forwarding a guest to the local server"),
+                )
+                .await;
+                let forward_cancel = session.child_cancel_token();
+                let forward =
+                    bridge::forward_tunnel_to_server(peer.stream, local_server, forward_cancel);
+                tokio::pin!(forward);
+                let result = tokio::select! {
+                    _ = cancel.cancelled() => break,
+                    result = &mut forward => result,
+                };
+                if let Err(err) = result {
+                    if cancel.is_cancelled() {
+                        break;
+                    }
+                    sink.report(
+                        ProgressEvent::started(JobKind::P2pHost, "Relay guest disconnected")
+                            .stage(JobStage::Running)
+                            .detail(err.to_string()),
+                    )
+                    .await;
+                }
+            }
+            Err(err) => {
+                if cancel.is_cancelled() {
+                    break;
+                }
+                let raw = err.to_string();
+                let message = if raw.contains("JOIN_UNREACHABLE") {
+                    raw
+                } else {
+                    format!("JOIN_UNREACHABLE: {raw}")
+                };
+                sink.report(
+                    ProgressEvent::started(JobKind::P2pHost, "Relay fallback unavailable")
+                        .stage(JobStage::Failed)
+                        .failed(message),
+                )
+                .await;
+                tokio::select! {
+                    _ = cancel.cancelled() => break,
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(8)) => {}
+                }
+            }
+        }
     }
 }
 
@@ -1675,6 +1811,9 @@ mod tests {
         let mut options = HostOptions::default();
         options.public = false;
         options.force_relay = true;
+        // A closed port, so the background host-relay dial fails locally
+        // instead of resolving the public relay during this test.
+        options.relay_url = Some("tcp://127.0.0.1:1".into());
         let host = manager
             .host_world(options, std::sync::Arc::new(NoopProgressSink))
             .await

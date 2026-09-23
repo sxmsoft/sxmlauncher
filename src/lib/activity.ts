@@ -131,14 +131,29 @@ export function activityPresentation(job: ProgressEvent): ActivityPresentation {
  */
 export function coalesceActivityJobs(jobs: ProgressEvent[]): ProgressEvent[] {
   const newestLive = new Map<string, string>();
+  const newest = new Map<string, ProgressEvent>();
   for (const job of jobs) {
-    if (job.finished || job.error) continue;
     if (job.kind !== "p2p_host" && job.kind !== "p2p_connect") continue;
+    if (!newest.has(job.kind)) newest.set(job.kind, job);
+    if (job.finished || job.error) continue;
     if (!newestLive.has(job.kind)) newestLive.set(job.kind, job.jobId);
   }
   return jobs.filter((job) => {
-    if (job.finished || job.error) return true;
     if (job.kind !== "p2p_host" && job.kind !== "p2p_connect") return true;
+    const latest = newest.get(job.kind);
+    // A failed join is the snapshot that matters. Older "Opening a direct
+    // tunnel" / "Joining …" rows must not stay on Connecting after it.
+    if (
+      job.kind === "p2p_connect" &&
+      latest &&
+      (latest.finished || latest.error) &&
+      latest.jobId !== job.jobId &&
+      !job.finished &&
+      !job.error
+    ) {
+      return false;
+    }
+    if (job.finished || job.error) return true;
     return newestLive.get(job.kind) === job.jobId;
   });
 }

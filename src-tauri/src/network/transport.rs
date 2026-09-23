@@ -224,16 +224,45 @@ impl TransportRegistry {
     ) -> AppResult<ConnectedPeer> {
         let mut last_error: Option<AppError> = None;
 
+        if descriptor.mode == ConnectionMode::Relay {
+            sink.report(
+                ProgressEvent::started(JobKind::P2pConnect, "Host is on a strict NAT")
+                    .stage(JobStage::ConnectingP2p)
+                    .detail("Trying a short direct tunnel, then the relay"),
+            )
+            .await;
+        }
+
         // Relay mode still tries loopback / LAN first. A strict NAT blocks the
-        // public mapping, not a second launcher on this PC.
+        // public mapping, not a second launcher on this PC. That attempt is
+        // capped so a dead candidate cannot postpone the relay.
         if let Some(direct) = direct_attempt(descriptor) {
-            match self.direct.connect(&direct, sink.clone()).await {
-                Ok(peer) => return Ok(peer),
-                Err(err) => {
+            let budget = if descriptor.mode == ConnectionMode::Relay {
+                RELAY_DIRECT_TIMEOUT
+            } else {
+                DIRECT_ATTEMPT_TIMEOUT
+            };
+            match tokio::time::timeout(budget, self.direct.connect(&direct, sink.clone())).await {
+                Ok(Ok(peer)) => return Ok(peer),
+                Ok(Err(err)) => {
                     sink.report(
                         ProgressEvent::started(JobKind::P2pConnect, "Direct connection failed")
-                            .stage(JobStage::ConnectingP2p)
-                            .detail(err.to_string()),
+                            .stage(JobStage::Failed)
+                            .detail(err.to_string())
+                            .failed(err.to_string()),
+                    )
+                    .await;
+                    last_error = Some(err);
+                }
+                Err(_) => {
+                    let err = AppError::Transport(
+                        "JOIN_UNREACHABLE: the direct tunnel timed out before the relay fallback"
+                            .to_string(),
+                    );
+                    sink.report(
+                        ProgressEvent::started(JobKind::P2pConnect, "Direct tunnel timed out")
+                            .stage(JobStage::Failed)
+                            .failed(err.to_string()),
                     )
                     .await;
                     last_error = Some(err);
@@ -262,6 +291,20 @@ impl TransportRegistry {
             return None;
         }
         self.direct.probe(descriptor).await.ok().flatten()
+    }
+}
+
+/// How long a strict-NAT guest may spend on loopback/LAN before the relay.
+const RELAY_DIRECT_TIMEOUT: Duration = Duration::from_secs(2);
+/// Cap for a punchable direct attempt (STUN plus the punch budget).
+const DIRECT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Cancels signaling when a direct attempt is dropped by the outer timeout.
+struct CancelOnDrop(CancellationToken);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
     }
 }
 
@@ -327,62 +370,71 @@ impl Transport for DirectTransport {
                 .collect::<Vec<_>>(),
         ));
         let stop_signals = CancellationToken::new();
+        let _stop_on_drop = CancelOnDrop(stop_signals.clone());
+        let locals_only = !candidates.is_empty()
+            && candidates
+                .iter()
+                .all(|(endpoint, _)| endpoint.kind == EndpointKind::Local);
+        // Local candidates (loopback / LAN) do not need STUN. Classifying here
+        // burns several seconds and, on a strict-NAT host, delays the relay.
         if let Some(directory) = &self.directory {
-            let guest_peer = uuid::Uuid::new_v4().to_string();
-            let mut offered = guest_endpoints(socket.local_addr().ok());
-            match holepunch::StunClient::classify(
-                &socket,
-                &self.punch.stun_servers,
-                self.punch.stun_timeout,
-            )
-            .await
-            {
-                Ok(mapping) => offered.push(PeerEndpoint::public(mapping.address)),
-                Err(err) => {
-                    sink.report(
-                        ProgressEvent::started(JobKind::P2pConnect, "NAT discovery failed")
-                            .stage(JobStage::ConnectingP2p)
-                            .detail(format!("STUN_UNREACHABLE: {err}")),
+            if !locals_only {
+                let guest_peer = uuid::Uuid::new_v4().to_string();
+                let mut offered = guest_endpoints(socket.local_addr().ok());
+                match holepunch::StunClient::classify(
+                    &socket,
+                    &self.punch.stun_servers,
+                    self.punch.stun_timeout,
+                )
+                .await
+                {
+                    Ok(mapping) => offered.push(PeerEndpoint::public(mapping.address)),
+                    Err(err) => {
+                        sink.report(
+                            ProgressEvent::started(JobKind::P2pConnect, "NAT discovery failed")
+                                .stage(JobStage::ConnectingP2p)
+                                .detail(format!("STUN_UNREACHABLE: {err}")),
+                        )
+                        .await;
+                    }
+                }
+                let session_id = uuid::Uuid::parse_str(&descriptor.peer_id)
+                    .unwrap_or_else(|_| uuid::Uuid::nil());
+                let _ = directory
+                    .publish_signal(
+                        &descriptor.peer_id,
+                        &SignalingEnvelope::Offer {
+                            from_peer_id: guest_peer.clone(),
+                            to_peer_id: descriptor.peer_id.clone(),
+                            session_id,
+                            candidates: offered,
+                            public_key: descriptor.public_key.clone(),
+                            signature: String::new(),
+                            sent_at: chrono::Utc::now(),
+                        },
                     )
                     .await;
-                }
-            }
-            let session_id =
-                uuid::Uuid::parse_str(&descriptor.peer_id).unwrap_or_else(|_| uuid::Uuid::nil());
-            let _ = directory
-                .publish_signal(
-                    &descriptor.peer_id,
-                    &SignalingEnvelope::Offer {
-                        from_peer_id: guest_peer.clone(),
-                        to_peer_id: descriptor.peer_id.clone(),
-                        session_id,
-                        candidates: offered,
-                        public_key: descriptor.public_key.clone(),
-                        signature: String::new(),
-                        sent_at: chrono::Utc::now(),
-                    },
-                )
-                .await;
-            let directory = directory.clone();
-            let extra = peers.clone();
-            let stop = stop_signals.clone();
-            tokio::spawn(async move {
-                while !stop.is_cancelled() {
-                    if let Ok(envelopes) = directory.drain_signals(&guest_peer).await {
-                        for envelope in envelopes {
-                            if let SignalingEnvelope::Answer { candidates, .. } = envelope {
-                                let mut guard = extra.lock();
-                                for candidate in candidates {
-                                    if !guard.contains(&candidate.addr) {
-                                        guard.push(candidate.addr);
+                let directory = directory.clone();
+                let extra = peers.clone();
+                let stop = stop_signals.clone();
+                tokio::spawn(async move {
+                    while !stop.is_cancelled() {
+                        if let Ok(envelopes) = directory.drain_signals(&guest_peer).await {
+                            for envelope in envelopes {
+                                if let SignalingEnvelope::Answer { candidates, .. } = envelope {
+                                    let mut guard = extra.lock();
+                                    for candidate in candidates {
+                                        if !guard.contains(&candidate.addr) {
+                                            guard.push(candidate.addr);
+                                        }
                                     }
                                 }
                             }
                         }
+                        tokio::time::sleep(Duration::from_millis(150)).await;
                     }
-                    tokio::time::sleep(Duration::from_millis(150)).await;
-                }
-            });
+                });
+            }
         }
 
         sink.report(
@@ -392,10 +444,6 @@ impl Transport for DirectTransport {
         )
         .await;
 
-        let locals_only = candidates
-            .iter()
-            .all(|(endpoint, _)| endpoint.kind == EndpointKind::Local)
-            && !candidates.is_empty();
         let punch_config = if locals_only {
             // Unreachable LAN addresses must not stall the relay fallback.
             PunchConfig {
@@ -1065,6 +1113,109 @@ mod tests {
             vec![PeerEndpoint::public("203.0.113.5:25565".parse().unwrap())],
         );
         assert!(direct_attempt(&descriptor).is_none());
+    }
+
+    #[tokio::test]
+    async fn relay_mode_falls_back_before_a_direct_tunnel_can_stall() {
+        use std::time::Instant;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut length_bytes = [0u8; 4];
+            socket.read_exact(&mut length_bytes).await.expect("length");
+            let mut payload = vec![0u8; u32::from_be_bytes(length_bytes) as usize];
+            socket.read_exact(&mut payload).await.expect("payload");
+            let body = serde_json::to_vec(&crate::network::relay::RelayResponse {
+                ok: true,
+                error: None,
+                observed_address: None,
+                region: Some("test".into()),
+            })
+            .expect("encode");
+            socket
+                .write_all(&(body.len() as u32).to_be_bytes())
+                .await
+                .expect("write length");
+            socket.write_all(&body).await.expect("write body");
+            // Hold the pipe open until the guest drops it.
+            let _ = socket.read(&mut [0u8; 8]).await;
+        });
+
+        let registry = TransportRegistry::new(
+            Arc::new(DirectTransport::new("127.0.0.1:0".parse().unwrap())),
+            Arc::new(crate::network::relay::RelayTransport::new(None)),
+        );
+        let mut descriptor = sample_descriptor(
+            ConnectionMode::Relay,
+            vec![
+                PeerEndpoint::public("203.0.113.5:25565".parse().unwrap()),
+                PeerEndpoint::local("127.0.0.1:1".parse().unwrap()),
+            ],
+        );
+        descriptor.relay = Some(crate::models::server::RelayDescriptor {
+            url: format!("tcp://{address}"),
+            room_token: "room".into(),
+            region: None,
+            cert_fingerprint: None,
+        });
+
+        let started = Instant::now();
+        let peer = registry
+            .connect(
+                &descriptor,
+                Arc::new(crate::models::progress::NoopProgressSink),
+            )
+            .await
+            .expect("relay fallback");
+        let elapsed = started.elapsed();
+        assert_eq!(peer.mode, ConnectionMode::Relay);
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "strict-NAT fallback took {elapsed:?}; a direct tunnel must not stall the relay"
+        );
+    }
+
+    #[tokio::test]
+    async fn dead_relay_fails_quickly_instead_of_staying_on_connecting() {
+        use std::time::Instant;
+
+        let registry = TransportRegistry::new(
+            Arc::new(DirectTransport::new("127.0.0.1:0".parse().unwrap())),
+            Arc::new(crate::network::relay::RelayTransport::new(None)),
+        );
+        let mut descriptor = sample_descriptor(
+            ConnectionMode::Relay,
+            vec![PeerEndpoint::public("203.0.113.5:25565".parse().unwrap())],
+        );
+        descriptor.relay = Some(crate::models::server::RelayDescriptor {
+            url: "tcp://127.0.0.1:1".into(),
+            room_token: "room".into(),
+            region: None,
+            cert_fingerprint: None,
+        });
+
+        let started = Instant::now();
+        let error = registry
+            .connect(
+                &descriptor,
+                Arc::new(crate::models::progress::NoopProgressSink),
+            )
+            .await
+            .expect_err("dead relay");
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "dead relay took {elapsed:?}"
+        );
+        let message = error.to_string();
+        assert!(
+            message.contains("JOIN_UNREACHABLE"),
+            "expected a join error, got {message}"
+        );
     }
 
     #[tokio::test]

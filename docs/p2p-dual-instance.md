@@ -32,6 +32,18 @@ On the other system (not a second window on the host PC):
 3. A bad checksum says the code is corrupted (TR and EN). An unknown or expired code says the host is offline or the invite lapsed. A code whose listing body disappeared says the host stopped refreshing — copy a fresh code.
 4. Activity should end on **Connected to …** / the game joining, not a stuck download. After the host's server log prints `Done`, Activity leaves Starting / Downloading.
 
+## Strict NAT (relay) retest
+
+Use this when the host toast says the world was published **via relay**, or Activity says **Strict NAT**. The host desktop and the joining machine are still two different computers. Both use the same remote Redis URL.
+
+1. Host as usual and copy the share code. The listing mode is relay: a direct public mapping is not punchable.
+2. On the other machine, select the ready instance and join with that code.
+3. Activity may show **Opening a direct tunnel** for a couple of seconds (loopback and LAN only). It must then show **Strict NAT: connecting through the relay**.
+4. When the relay accepts the room, Minecraft starts with `--quickPlayMultiplayer 127.0.0.1:<bridge port>`. The game talks to that local bridge. The bridge is the relay pipe, not a public UDP hole. Running games becomes 1.
+5. When the relay cannot be resolved, refuses the room, or never answers, Activity leaves Connecting within about 20 seconds and shows `JOIN_UNREACHABLE` (TR and EN). Minecraft does not start. Running games stays at 0.
+
+Do not wait on **Opening a direct tunnel** past half a minute. That row used to sit for about 90 seconds while relay DNS blocked the join, and the game never launched.
+
 ## Optional same-machine process
 
 This is not the validation path. The app is single-instance, so a second launch on the same Windows user focuses the window that is already open.
@@ -49,6 +61,9 @@ A loopback punch with STUN and the relay down is covered by the automated test b
 
   `cargo test --manifest-path src-tauri/Cargo.toml --lib sloppy_share_code_joins_a_loopback_host`
 
-- Activity hides an older host download once a newer “waiting for players” snapshot exists.
+- Activity hides an older host download once a newer “waiting for players” snapshot exists, and a failed join removes the Connecting rows.
+- A relay-mode listing falls back to a local relay in a few seconds, and a dead relay returns `JOIN_UNREACHABLE` instead of hanging:
+
+  `cargo test --manifest-path src-tauri/Cargo.toml --lib relay_mode_falls_back_before_a_direct_tunnel_can_stall`
 
 These do not open a real Upstash account and do not replace a two-machine NAT test.

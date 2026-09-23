@@ -105,6 +105,19 @@ pub async fn bridge_to_local_server(
     )
     .await;
 
+    forward_tunnel_to_server(tunnel, server_address, cancel).await
+}
+
+/// Splice an already-open tunnel (UDP or relay TCP) onto the local server.
+///
+/// Unlike [`bridge_to_local_server`], this does not emit a Connecting row.
+/// The strict-NAT host relay loop uses it so a retry does not leave Activity
+/// on Connecting while the world is still up.
+pub async fn forward_tunnel_to_server(
+    tunnel: Box<dyn DuplexStream>,
+    server_address: SocketAddr,
+    cancel: CancellationToken,
+) -> AppResult<BridgeStats> {
     let server = tokio::time::timeout(
         std::time::Duration::from_secs(10),
         TcpStream::connect(server_address),
@@ -117,11 +130,12 @@ pub async fn bridge_to_local_server(
         ))
     })?
     .map_err(|err| {
-        AppError::Transport(format!("cannot reach the local server at {server_address}: {err}"))
+        AppError::Transport(format!(
+            "cannot reach the local server at {server_address}: {err}"
+        ))
     })?;
 
-    let stats = copy_bidirectional(server, tunnel, cancel).await?;
-    Ok(stats)
+    copy_bidirectional(server, tunnel, cancel).await
 }
 
 /// Guest side: listen on loopback, then splice the game's connection into the
@@ -284,7 +298,9 @@ pub async fn peek_handshake(client: &TcpStream) -> AppResult<(Option<HandshakeIn
     let read = match read {
         Ok(Ok(read)) => read,
         Ok(Err(err)) => {
-            return Err(AppError::Transport(format!("cannot peek the handshake: {err}")))
+            return Err(AppError::Transport(format!(
+                "cannot peek the handshake: {err}"
+            )))
         }
         Err(_) => return Ok((None, Vec::new())),
     };
@@ -433,7 +449,10 @@ pub struct SessionLogEntry {
 }
 
 impl SessionLogEntry {
-    pub fn to_record(&self, ended_at: Option<DateTime<Utc>>) -> crate::store::servers::P2pSessionRecord {
+    pub fn to_record(
+        &self,
+        ended_at: Option<DateTime<Utc>>,
+    ) -> crate::store::servers::P2pSessionRecord {
         crate::store::servers::P2pSessionRecord {
             id: self.id,
             role: self.role.clone(),
@@ -449,8 +468,15 @@ impl SessionLogEntry {
                 format!(
                     "protocol {} · {} · {}",
                     handshake.protocol_version,
-                    handshake.username.clone().unwrap_or_else(|| "unknown".into()),
-                    if handshake.is_status_ping() { "status" } else { "login" }
+                    handshake
+                        .username
+                        .clone()
+                        .unwrap_or_else(|| "unknown".into()),
+                    if handshake.is_status_ping() {
+                        "status"
+                    } else {
+                        "login"
+                    }
                 )
             }),
         }
@@ -460,10 +486,13 @@ impl SessionLogEntry {
 /// Measure a TCP round trip to a local or remote endpoint.
 pub async fn measure_tcp_rtt(address: SocketAddr) -> AppResult<u32> {
     let started = Instant::now();
-    let stream = tokio::time::timeout(std::time::Duration::from_secs(3), TcpStream::connect(address))
-        .await
-        .map_err(|_| AppError::Transport(format!("timed out measuring {address}")))?
-        .map_err(|err| AppError::Transport(format!("cannot reach {address}: {err}")))?;
+    let stream = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        TcpStream::connect(address),
+    )
+    .await
+    .map_err(|_| AppError::Transport(format!("timed out measuring {address}")))?
+    .map_err(|err| AppError::Transport(format!("cannot reach {address}: {err}")))?;
     drop(stream);
     Ok(started.elapsed().as_millis() as u32)
 }
@@ -646,7 +675,10 @@ mod tests {
 
         // The duplex buffer (64 KiB) holds this write until the bridge starts
         // reading, so there is no race with the connection setup above.
-        test_side.write_all(b"hello minecraft").await.expect("write");
+        test_side
+            .write_all(b"hello minecraft")
+            .await
+            .expect("write");
         let mut response = vec![0u8; 15];
         tokio::time::timeout(
             std::time::Duration::from_secs(5),

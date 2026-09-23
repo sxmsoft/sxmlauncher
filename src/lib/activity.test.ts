@@ -217,6 +217,48 @@ describe("activityPresentation", () => {
     expect(activityPresentation(selectStatusJob([live, download])!).showProgress).toBe(false);
   });
 
+  it("drops stuck Connecting rows once a join fails", () => {
+    const joining = job({
+      jobId: "joining",
+      kind: "p2p_connect",
+      stage: "connecting_p2p",
+      label: "Joining Cobblemon",
+    });
+    const tunnel = job({
+      jobId: "tunnel",
+      kind: "p2p_connect",
+      stage: "connecting_p2p",
+      label: "Opening a direct tunnel",
+    });
+    const failed = job({
+      jobId: "failed",
+      kind: "p2p_connect",
+      stage: "failed",
+      label: "Could not join Cobblemon",
+      finished: true,
+      error: "JOIN_UNREACHABLE: the relay address did not resolve before the timeout",
+    });
+    const visible = coalesceActivityJobs([failed, tunnel, joining]);
+    expect(visible.map((entry) => entry.jobId)).toEqual(["failed"]);
+    expect(selectStatusJob([failed, tunnel, joining])).toBeNull();
+  });
+
+  it("keeps only the newest unfinished join snapshot", () => {
+    const joining = job({
+      jobId: "joining",
+      kind: "p2p_connect",
+      stage: "connecting_p2p",
+      label: "Joining Cobblemon",
+    });
+    const tunnel = job({
+      jobId: "tunnel",
+      kind: "p2p_connect",
+      stage: "connecting_p2p",
+      label: "Opening a direct tunnel",
+    });
+    expect(coalesceActivityJobs([tunnel, joining]).map((entry) => entry.jobId)).toEqual(["tunnel"]);
+  });
+
   it("keeps a real server-jar download while it is the newest host job", () => {
     const download = job({
       jobId: "jar",

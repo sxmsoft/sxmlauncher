@@ -676,6 +676,11 @@ fn join_status(
 }
 
 /// Open the bridge, then start the matching instance straight into it.
+///
+/// `join_world` has already returned, so the tunnel is up (direct UDP or the
+/// relay). Minecraft is not started when that connect fails. 1.20+ receives
+/// `--quickPlayMultiplayer` aimed at `session.local_address`, the loopback
+/// bridge in front of whichever transport won.
 async fn finish_join(
     app: &tauri::AppHandle,
     state: &State<'_, AppState>,
