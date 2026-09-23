@@ -245,5 +245,25 @@
     "running": "{{count}} çalışıyor",
     "online": "{{count}} çevrimiçi",
     "lan": "LAN · {{count}} yakında"
+  },
+  "presence": {
+    "home": "Ana menüde geziniyor",
+    "library": "Kütüphaneye bakıyor",
+    "modpacks": "Modpaketlerine bakıyor",
+    "profile": "Profil ve hesaba bakıyor",
+    "activity": "Etkinliğe bakıyor",
+    "settings": "Ayarlarda",
+    "multiplayer": "Çok oyunculu hazırlığı",
+    "download": "İndirme durumu",
+    "launching": "Başlatılıyor",
+    "hosting": "P2P sunucu hazırlıyor",
+    "joining": "Sunucuya katılmaya hazırlanıyor",
+    "hostingShort": "Sunucu",
+    "multiplayerShort": "Çok oyunculu",
+    "brand": "SXMLAUNCHER",
+    "settingsTitle": "Discord Rich Presence",
+    "settingsBody": "Başlatıcının ne yaptığını Discord’da gösterir. Uygulama kimliği boşsa kapalıdır. Discord çalışmıyorsa hiçbir şey olmaz.",
+    "appId": "Uygulama kimliği",
+    "appIdHint": "Discord Developer Portal’daki rakamlar. SXML_DISCORD_APPLICATION_ID bu alanı ezer. Logoyu Rich Presence görseli olarak sxmlauncher anahtarıyla yükle."
   }
 }

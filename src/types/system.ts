@@ -69,6 +69,8 @@ export interface AppSettings {
   curseforgeApiKey: string | null;
   lastSelectedInstance: string | null;
   analyticsEnabled: boolean;
+  /** Discord application id. Empty disables Rich Presence. */
+  discordApplicationId: string;
 }
 
 export interface AppInfo {

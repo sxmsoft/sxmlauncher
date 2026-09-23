@@ -3,6 +3,8 @@
 Brand: **SXMLAUNCHER** (not Misty).  
 Source: native `GenerateImage` model. Procedural Pillow pack quarantined at `/workspace/sxmlauncher-logos/loaders/_rejected_procedural/`.
 
+Fabric, Forge, NeoForge, and Quilt **icons** (`icon-*-64.png` and `icon-*-256.png`) are the supplied brand marks, scaled to the card sizes. Vanilla and modpack icons are unchanged. Background plates (`bg-*.png`) are unchanged.
+
 Post only: black knockout → RGBA, Lanczos 256/64, background upscale 1280×720 → 1920×1080.
 
 ## Card backgrounds (1920×1080 RGB PNG)

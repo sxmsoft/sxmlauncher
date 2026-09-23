@@ -8,6 +8,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAutoUpdateCheck } from "@/hooks/queries";
 import { useBackendEvents } from "@/hooks/use-backend-events";
+import { useDiscordPresence } from "@/hooks/use-discord-presence";
 import { useNoDropNavigation } from "@/hooks/use-no-drop-navigation";
 import { useWallpaper } from "@/hooks/use-wallpaper";
 
@@ -20,6 +21,7 @@ import { useWallpaper } from "@/hooks/use-wallpaper";
  */
 export function AppShell() {
   useBackendEvents();
+  useDiscordPresence();
   useWallpaper();
   useNoDropNavigation();
   // Startup update check: at most once a day, silent unless it finds a

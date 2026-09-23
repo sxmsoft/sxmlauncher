@@ -20,6 +20,7 @@ pub mod jobs;
 pub mod models;
 pub mod mods;
 pub mod network;
+pub mod presence;
 pub mod process;
 pub mod state;
 pub mod store;
@@ -115,6 +116,8 @@ pub fn run() {
             commands::system::cache_clear,
             commands::system::cache_stats,
             commands::system::log_tail,
+            commands::presence::discord_presence_set,
+            commands::presence::discord_presence_clear,
             // --- updater --------------------------------------------------
             commands::system::updater_check,
             commands::system::updater_download,
@@ -206,6 +209,11 @@ pub fn run() {
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
+                // Drop Discord presence before the process goes away. Shutdown
+                // below also clears it; doing it here covers a fast exit.
+                if let Some(state) = window.app_handle().try_state::<AppState>() {
+                    state.presence().shutdown();
+                }
                 // Stop hosted worlds and game processes before the app exits so
                 // no orphaned java.exe or stale listing is left behind.
                 let app = window.app_handle().clone();

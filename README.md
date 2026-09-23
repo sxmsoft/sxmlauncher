@@ -50,6 +50,7 @@ pnpm install
 | `SXML_ELYBY_CLIENT_SECRET` | Only for your own Ely.by **web** application. Leave empty for `sxmlauncher3`. Never commit it |
 | `SXML_ELYBY_REDIRECT_URI` | Used only with a web application secret. Must match registration; default `http://localhost:25564/elyby/callback` |
 | `SXML_CURSEFORGE_API_KEY` | CurseForge Core API key |
+| `SXML_DISCORD_APPLICATION_ID` | Discord application id for Rich Presence. Public snowflake, not a secret. Empty disables presence. Upload art asset key `sxmlauncher`. See [docs/discord-rich-presence.md](docs/discord-rich-presence.md) |
 
 ## Develop
 

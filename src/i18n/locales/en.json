@@ -245,5 +245,25 @@
     "running": "{{count}} running",
     "online": "{{count}} online",
     "lan": "LAN · {{count}} nearby"
+  },
+  "presence": {
+    "home": "Browsing home",
+    "library": "Browsing the library",
+    "modpacks": "Browsing modpacks",
+    "profile": "Viewing profile",
+    "activity": "Viewing activity",
+    "settings": "In settings",
+    "multiplayer": "Preparing multiplayer",
+    "download": "Download in progress",
+    "launching": "Launching",
+    "hosting": "Preparing a P2P host",
+    "joining": "Preparing to join",
+    "hostingShort": "Hosting",
+    "multiplayerShort": "Multiplayer",
+    "brand": "SXMLAUNCHER",
+    "settingsTitle": "Discord Rich Presence",
+    "settingsBody": "Shows what this launcher is doing on Discord. Leave the application id empty to turn it off. If Discord is not running, nothing happens.",
+    "appId": "Application ID",
+    "appIdHint": "Digits from the Discord Developer Portal. SXML_DISCORD_APPLICATION_ID overrides this. Upload a logo as Rich Presence art with the key sxmlauncher."
   }
 }

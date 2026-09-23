@@ -327,6 +327,10 @@ pub struct AppSettings {
     pub curseforge_api_key: Option<String>,
     pub last_selected_instance: Option<uuid::Uuid>,
     pub analytics_enabled: bool,
+    /// Discord application id for Rich Presence. Empty disables presence.
+    /// Not a secret — it is the public id from the Discord Developer Portal.
+    /// `SXML_DISCORD_APPLICATION_ID` overrides this when set.
+    pub discord_application_id: String,
 }
 
 impl Default for AppSettings {
@@ -379,6 +383,7 @@ impl Default for AppSettings {
             curseforge_api_key: None,
             last_selected_instance: None,
             analytics_enabled: false,
+            discord_application_id: String::new(),
         }
     }
 }
@@ -425,6 +430,11 @@ impl AppSettings {
         if let Ok(uri) = std::env::var("SXML_ELYBY_REDIRECT_URI") {
             if !uri.trim().is_empty() {
                 self.elyby_redirect_uri = uri;
+            }
+        }
+        if let Ok(id) = std::env::var("SXML_DISCORD_APPLICATION_ID") {
+            if !id.trim().is_empty() {
+                self.discord_application_id = id;
             }
         }
         self
@@ -483,6 +493,7 @@ impl AppSettings {
             self.lan_port
         };
         self.java_extra_roots.retain(|root| !root.trim().is_empty());
+        self.discord_application_id = self.discord_application_id.trim().to_string();
         self
     }
 
@@ -592,6 +603,7 @@ mod tests {
         assert!(parsed.prefer_system_java);
         assert!(parsed.lan_discovery);
         assert_eq!(parsed.ui_background_kind, "aurora");
+        assert!(parsed.discord_application_id.is_empty());
     }
 
     #[test]

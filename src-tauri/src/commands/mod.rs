@@ -13,6 +13,7 @@ pub mod instance;
 pub mod jobs;
 pub mod mods;
 pub mod network;
+pub mod presence;
 pub mod system;
 
 use serde::{Deserialize, Serialize};

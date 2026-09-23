@@ -8,6 +8,7 @@
  */
 
 export { systemService, type SystemService } from "./system";
+export { discordService, type PresenceActivity, type PresenceStatus } from "./discord";
 export { accountService, type AccountService } from "./account";
 export { jobsService, type CancelOutcome, type JobsService } from "./jobs";
 export { instanceService, type InstanceService } from "./instances";

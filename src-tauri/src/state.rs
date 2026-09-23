@@ -27,6 +27,7 @@ use crate::network::{
     holepunch::PunchConfig, localnet::LanManager, DirectTransport, RelayTransport, SessionManager,
     TransportRegistry,
 };
+use crate::presence::Presence;
 use crate::store::Database;
 
 /// Tauri event name for job progress.
@@ -83,6 +84,8 @@ pub struct AppState {
     pub running: DashMap<Uuid, Arc<RunningGameHandle>>,
     /// Dedicated servers started by the integrated host path (keyed by session id).
     pub hosted_servers: DashMap<Uuid, Arc<crate::instances::HostedServer>>,
+    /// Discord Rich Presence. No-ops when Discord is closed or no app id is set.
+    presence: Presence,
 }
 
 impl AppState {
@@ -124,6 +127,7 @@ impl AppState {
             pending_logins: DashMap::new(),
             running: DashMap::new(),
             hosted_servers: DashMap::new(),
+            presence: Presence::spawn(),
         };
 
         // Connect the directory in the background: a missing Redis must never
@@ -248,6 +252,10 @@ impl AppState {
         self.mods.read().clone()
     }
 
+    pub fn presence(&self) -> &Presence {
+        &self.presence
+    }
+
     /// Persist settings and rebuild the managers that depend on them.
     pub async fn apply_settings(&self, settings: AppSettings) -> AppResult<AppSettings> {
         let mut sanitized = settings.sanitized();
@@ -350,6 +358,7 @@ impl AppState {
 
     /// Stop every game process (app exit).
     pub async fn shutdown(&self) {
+        self.presence.shutdown();
         self.lan.shutdown();
         if let Some(network) = self.network_optional() {
             network.shutdown().await;

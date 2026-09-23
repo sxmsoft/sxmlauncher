@@ -202,6 +202,7 @@ export function SettingsPage() {
 type SectionProps = { draft: AppSettings; patch: (next: Partial<AppSettings>) => void };
 
 function GeneralSection({ draft, patch }: SectionProps) {
+  const { t } = useTranslation();
   const info = useAppInfo();
 
   return (
@@ -226,6 +227,24 @@ function GeneralSection({ draft, patch }: SectionProps) {
             description="Hosted worlds stay online until you quit from the tray."
             control={<Switch checked={draft.closeToTray} onCheckedChange={(value) => patch({ closeToTray: value })} />}
           />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("presence.settingsTitle")}</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <p className="text-muted-foreground text-xs leading-relaxed">{t("presence.settingsBody")}</p>
+          <Field label={t("presence.appId")} hint={t("presence.appIdHint")}>
+            <Input
+              value={draft.discordApplicationId}
+              onChange={(event) => patch({ discordApplicationId: event.target.value.trim() })}
+              placeholder="123456789012345678"
+              spellCheck={false}
+              autoComplete="off"
+            />
+          </Field>
         </CardContent>
       </Card>
 

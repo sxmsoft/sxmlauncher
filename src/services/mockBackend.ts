@@ -98,6 +98,14 @@ let instances: Instance[] = [
     memory: { minMb: 4096, maxMb: 10240 },
   }),
   instance({
+    id: "3f1c1a4e-5555-4a1e-9c11-000000000005",
+    name: "Quilt Meadow",
+    description: "Quilt 1.21.1",
+    loader: { kind: "quilt", version: "0.26.4", build: null },
+    modCount: 4,
+    status: "ready",
+  }),
+  instance({
     id: "3f1c1a4e-3333-4a1e-9c11-000000000003",
     name: "Skyblock SMP",
     description: "Server instance kept in sync with the friends' world",
@@ -198,6 +206,7 @@ const settings: AppSettings = {
   curseforgeApiKey: null,
   lastSelectedInstance: instances[0]?.id ?? null,
   analyticsEnabled: false,
+  discordApplicationId: "",
 };
 
 /**
@@ -428,6 +437,10 @@ export function mockResponse(command: string, args?: Record<string, unknown>): u
       return settings;
     case "settings_update":
       return (args?.settings as AppSettings | undefined) ?? settings;
+    case "discord_presence_set":
+      return { enabled: false };
+    case "discord_presence_clear":
+      return null;
     case "settings_test_redis":
       return { ok: true, onlinePlayers: 1_284, message: "connected to the server directory" } satisfies RedisProbe;    case "updater_check": {
       // Browser preview has no updater; report up-to-date so the section
