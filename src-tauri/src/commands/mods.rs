@@ -9,8 +9,8 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::models::instance::{Instance, LoaderKind, ModLoader};
 use crate::models::modpack::{
-    ModProject, ModSearchQuery, ModSearchResults, ModSource, ModVersion, PackTarget,
-    ResolvedPackPlan,
+    newest_downloadable, ModProject, ModSearchQuery, ModSearchResults, ModSource, ModVersion,
+    PackTarget, ResolvedPackPlan,
 };
 use crate::models::progress::InstanceBoundSink;
 use crate::mods::resolver::ModRequest;
@@ -370,6 +370,36 @@ pub async fn modpack_install(
     }
 }
 
+/// Minecraft version declared by the pack file, not by the instance picker.
+fn pack_game_version(version: &ModVersion) -> String {
+    version
+        .game_versions
+        .iter()
+        .find(|value| {
+            value.split('.').next().is_some_and(|major| {
+                !major.is_empty() && major.chars().all(|ch| ch.is_ascii_digit())
+            })
+        })
+        .cloned()
+        .or_else(|| version.game_versions.first().cloned())
+        .unwrap_or_else(|| "1.21.1".to_string())
+}
+
+/// Loader declared by the pack file. The `.mrpack` manifest replaces this
+/// once the archive is installed.
+fn pack_loader(version: &ModVersion) -> ModLoader {
+    let kind = version
+        .loaders
+        .iter()
+        .find_map(|name| LoaderKind::from_str_opt(name))
+        .unwrap_or(LoaderKind::Fabric);
+    ModLoader {
+        kind,
+        version: None,
+        build: None,
+    }
+}
+
 async fn install_modrinth_modpack(
     project_id: String,
     version_id: Option<String>,
@@ -379,23 +409,24 @@ async fn install_modrinth_modpack(
 ) -> AppResult<Instance> {
     let engine = state.mods();
 
-    // 1. Resolve the pack version.
+    // 1. The pack file names its own Minecraft version and loader. Do not
+    //    filter by a pre-selected instance version: `project.versions` on
+    //    Modrinth is a list of version ids, and matching those as game
+    //    versions returns no files.
     let version = match &version_id {
         Some(version_id) => engine.modrinth().version(version_id).await?,
         None => {
-            let project = engine.modrinth().project(&project_id).await?;
-            let game_version = project.game_versions.last().cloned().ok_or_else(|| {
-                AppError::ModResolution("this pack lists no supported game version".into())
-            })?;
-            engine
-                .modrinth()
-                .latest_compatible(&project_id, &game_version, None)
-                .await?
-                .ok_or_else(|| {
-                    AppError::ModResolution("no downloadable version of this pack was found".into())
-                })?
+            let versions = engine.modrinth().all_versions(&project_id).await?;
+            newest_downloadable(versions).ok_or_else(|| {
+                AppError::ModResolution("no downloadable version of this pack was found".into())
+            })?
         }
     };
+    if !version.is_downloadable() {
+        return Err(AppError::ModResolution(
+            "this pack version has no download URL".into(),
+        ));
+    }
 
     // 2. Create the instance shell — packs never require a pre-existing instance.
     let instance = state
@@ -404,16 +435,8 @@ async fn install_modrinth_modpack(
             crate::models::instance::CreateInstanceRequest {
                 name: name.unwrap_or_else(|| version.name.clone()),
                 description: Some(format!("Modpack {}", version.version_number)),
-                game_version: version
-                    .game_versions
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| "1.20.1".to_string()),
-                loader: Some(ModLoader {
-                    kind: LoaderKind::Fabric,
-                    version: None,
-                    build: None,
-                }),
+                game_version: pack_game_version(&version),
+                loader: Some(pack_loader(&version)),
                 memory: None,
                 icon: None,
                 install_now: false,
@@ -510,9 +533,12 @@ async fn install_curseforge_modpack(
         }
         None => {
             let files = engine.curseforge().all_files(&mod_id).await?;
-            files.into_iter().next().ok_or_else(|| {
-                AppError::ModResolution("no downloadable CurseForge pack file was found".into())
-            })?
+            files
+                .into_iter()
+                .find(|file| file.is_downloadable())
+                .ok_or_else(|| {
+                    AppError::ModResolution("no downloadable CurseForge pack file was found".into())
+                })?
         }
     };
 

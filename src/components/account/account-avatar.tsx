@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import { cn } from "@/lib/utils";
-import { fallbackGradient, headStyle, headUrl, headUrlFallback, monogram } from "@/lib/skins";
+import { fallbackGradient, headStyle, headUrl, headUrlFallback, monogram, publicTextureUrl } from "@/lib/skins";
 import type { AccountSummary } from "@/types/account";
 
 /**
@@ -22,7 +22,7 @@ export function AccountAvatar({
   className?: string;
 }) {
   const [level, setLevel] = useState(0);
-  const texture = account.skin.skinUrl;
+  const texture = publicTextureUrl(account.skin.skinUrl);
   const slice = level === 0 ? headStyle(texture, size) : null;
 
   const renderSrc =

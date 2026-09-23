@@ -304,6 +304,33 @@ impl Downloader {
         Ok(outcomes)
     }
 
+    /// Mark a one-file job finished or failed.
+    ///
+    /// [`Self::fetch`] does not own the tracker: batch downloads share one job
+    /// and settle it in [`Self::fetch_all`]. A caller that opened a tracker for
+    /// a single file (authlib-injector, a server jar) must call this, or the
+    /// Activity row stays on Downloading after the file is already on disk.
+    pub async fn settle(
+        tracker: &JobTracker,
+        result: AppResult<DownloadOutcome>,
+    ) -> AppResult<DownloadOutcome> {
+        match result {
+            Ok(outcome) => {
+                tracker.finish().await;
+                Ok(outcome)
+            }
+            Err(AppError::Cancelled) => {
+                tracker.cancelled().await;
+                Err(AppError::Cancelled)
+            }
+            Err(err) => {
+                let message = err.to_string();
+                tracker.fail(message).await;
+                Err(err)
+            }
+        }
+    }
+
     /// One download attempt: stream to `.part`, verify, then rename.
     async fn attempt(&self, task: &DownloadTask, tracker: Arc<JobTracker>) -> AppResult<u64> {
         if let Some(parent) = task.destination.parent() {
@@ -662,6 +689,49 @@ mod tests {
             .await
             .expect_err("must not accept a corrupt file");
         assert_eq!(error.code(), crate::error::CODE_NETWORK);
+    }
+
+    #[tokio::test]
+    async fn settling_a_single_file_marks_the_job_done() {
+        let sink = Arc::new(CollectingProgressSink::default());
+        let tracker = Arc::new(JobTracker::start(
+            JobKind::Launch,
+            "authlib-injector (Ely.by agent)",
+            JobStage::Downloading,
+            sink.clone(),
+        ));
+        let outcome = DownloadOutcome {
+            label: "authlib-injector".into(),
+            path: PathBuf::from("authlib-injector.jar"),
+            bytes: 4,
+            from_cache: false,
+            sha1: None,
+        };
+        Downloader::settle(&tracker, Ok(outcome))
+            .await
+            .expect("settled");
+        let last = sink.snapshot().last().cloned().expect("event");
+        assert_eq!(last.stage, JobStage::Done);
+        assert!(last.finished);
+        assert!(last.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn settling_a_failure_does_not_leave_the_job_downloading() {
+        let sink = Arc::new(CollectingProgressSink::default());
+        let tracker = Arc::new(JobTracker::start(
+            JobKind::Launch,
+            "authlib-injector (Ely.by agent)",
+            JobStage::Downloading,
+            sink.clone(),
+        ));
+        let error = Downloader::settle(&tracker, Err(AppError::Network("connection reset".into())))
+            .await
+            .expect_err("failed download");
+        assert_eq!(error.code(), crate::error::CODE_NETWORK);
+        let last = sink.snapshot().last().cloned().expect("event");
+        assert_eq!(last.stage, JobStage::Failed);
+        assert!(last.finished);
     }
 
     #[test]

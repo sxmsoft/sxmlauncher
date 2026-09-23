@@ -82,7 +82,9 @@
     "subtitle": "Modrinth ve CurseForge mod paketleri. Paket kendi örneğini kurar; tekil modlar seçtiğin örneğe iner.",
     "target": "hedef",
     "choose": "Bir örnek seç…",
-    "custom": "Özel paketler"
+    "custom": "Özel paketler",
+    "inLibrary": "Kütüphanede",
+    "packOwnInstance": "Paketler kendi oyun sürümüyle kurulur."
   },
   "host": {
     "title": "Sunucu",
@@ -107,7 +109,13 @@
     "addAction": "Hesap ekle",
     "active": "Etkin",
     "previewing": "Önizleme",
-    "connected": "Microsoft hesabı bağlı"
+    "connected": "Microsoft hesabı bağlı",
+    "uploadTitle": "Skin yükle",
+    "uploadMicrosoft": "PNG, Minecraft hesabına gider.",
+    "uploadEly": "Ely.by skinleri ely.by sitesinde değiştirilir.",
+    "uploadOffline": "Çevrimdışı profillerde skin yükleme yok.",
+    "uploadDrop": "PNG dosyasını bu sayfaya da bırakabilirsin.",
+    "choosePng": "PNG seç…"
   },
   "settings": {
     "title": "Ayarlar",

@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { IndeterminateProgress, Progress } from "@/components/ui/progress";
 import { useNetworkStatus, useRunningInstances } from "@/hooks/queries";
 import { translateActivityStatus } from "@/i18n/status";
-import { activityPresentation } from "@/lib/activity";
+import { activityPresentation, selectStatusJob } from "@/lib/activity";
 import { cn, formatBytes } from "@/lib/utils";
 import { aggregateProgress, useJobsStore } from "@/stores/jobs";
 import { useSessionsStore } from "@/stores/sessions";
@@ -36,8 +36,8 @@ export function StatusStrip() {
   const guests = useSessionsStore((state) => Object.keys(state.guests).length);
 
   const active = jobs.filter((job) => !job.finished && !job.error);
-  const current = jobs[0] ?? null;
-  const aggregate = aggregateProgress(active);
+  const current = selectStatusJob(jobs);
+  const aggregate = aggregateProgress(active.filter((job) => activityPresentation(job).mode === "work"));
 
   // Throughput is only meaningful while something is downloading.
   const [rate, setRate] = useState(0);
@@ -122,6 +122,11 @@ export function StatusStrip() {
               <span className="sr-only">{t("strip.dismiss")}</span>
             </Button>
           )}
+        </div>
+      ) : (running?.length ?? 0) > 0 ? (
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <StatusDot tone="success" />
+          <span className="truncate font-medium">{translateActivityStatus("Service Running", t)}</span>
         </div>
       ) : (
         <div className="flex min-w-0 flex-1 items-center gap-2">

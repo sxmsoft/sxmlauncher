@@ -76,11 +76,7 @@ impl MsaTokenResponse {
     pub fn into_token_set(self) -> TokenSet {
         // Refresh 60s early so a launch never straddles the expiry boundary.
         let lifetime = Duration::seconds(self.expires_in.max(0) - 60);
-        TokenSet::new(
-            self.access_token,
-            self.refresh_token,
-            Utc::now() + lifetime,
-        )
+        TokenSet::new(self.access_token, self.refresh_token, Utc::now() + lifetime)
     }
 }
 
@@ -130,28 +126,83 @@ pub struct XstsToken {
     pub xuid: String,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-struct XblResponse {
-    token: String,
-    #[serde(default)]
-    display_claims: Option<XblClaims>,
+/// Read an Xbox Live or XSTS JSON body.
+///
+/// The envelope is PascalCase (`Token`, `DisplayClaims`) and the identity
+/// claim is lowercase (`xui`, `uhs`, `xid`). A `rename_all = "PascalCase"`
+/// serde struct looks for `Xui` / `Uhs` and reports a missing user hash even
+/// when Xbox sent one. Browser sign-in and device code both land here.
+pub fn parse_xbl_user_token(body: &str) -> AppResult<XblToken> {
+    let value = parse_xbox_json(body)?;
+    let token = xbox_string(&value, &["Token", "token"]).ok_or_else(|| {
+        AppError::Account("Xbox Live response did not include a token".to_string())
+    })?;
+    let user_hash = xbox_user_hash(&value).ok_or_else(|| {
+        AppError::Account("Xbox Live response did not include a user hash".to_string())
+    })?;
+    Ok(XblToken { token, user_hash })
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-struct XblClaims {
-    #[serde(default)]
-    xui: Vec<XuiClaim>,
+/// XSTS authorize body. The user hash matches the Xbox Live token; when XSTS
+/// only sends `xid`, the hash from the previous step is the one Minecraft wants.
+pub fn parse_xsts_token(body: &str, fallback_user_hash: &str) -> AppResult<XstsToken> {
+    let value = parse_xbox_json(body)?;
+    let token = xbox_string(&value, &["Token", "token"]).ok_or_else(|| {
+        AppError::Account("Xbox Live response did not include a token".to_string())
+    })?;
+    let claim = xbox_xui(&value);
+    let user_hash = claim
+        .as_ref()
+        .and_then(|claim| xbox_string(claim, &["uhs", "Uhs"]))
+        .filter(|hash| !hash.is_empty())
+        .or_else(|| {
+            let fallback = fallback_user_hash.trim();
+            if fallback.is_empty() {
+                None
+            } else {
+                Some(fallback.to_string())
+            }
+        })
+        .ok_or_else(|| {
+            AppError::Account("Xbox Live response did not include a user hash".to_string())
+        })?;
+    let xuid = claim
+        .as_ref()
+        .and_then(|claim| xbox_string(claim, &["xid", "Xid"]))
+        .unwrap_or_default();
+    Ok(XstsToken {
+        token,
+        user_hash,
+        xuid,
+    })
 }
 
-#[derive(Debug, Deserialize, Default)]
-#[serde(rename_all = "PascalCase")]
-struct XuiClaim {
-    #[serde(default)]
-    uhs: Option<String>,
-    #[serde(default)]
-    xid: Option<String>,
+fn parse_xbox_json(body: &str) -> AppResult<serde_json::Value> {
+    serde_json::from_str(body)
+        .map_err(|err| AppError::Account(format!("Xbox Live response was not JSON: {err}")))
+}
+
+fn xbox_xui(value: &serde_json::Value) -> Option<serde_json::Value> {
+    let claims = value
+        .get("DisplayClaims")
+        .or_else(|| value.get("displayClaims"))?;
+    let xui = claims.get("xui").or_else(|| claims.get("Xui"))?;
+    xui.as_array()?.first().cloned()
+}
+
+fn xbox_user_hash(value: &serde_json::Value) -> Option<String> {
+    xbox_xui(value).and_then(|claim| xbox_string(&claim, &["uhs", "Uhs"]))
+}
+
+fn xbox_string(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)
+            .and_then(|item| item.as_str())
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_string)
+    })
 }
 
 /// Mojang session granted by `login_with_xbox`.
@@ -216,7 +267,9 @@ impl MinecraftProfile {
 /// Convert Mojang's 32-char hex id (no dashes) into a UUID.
 pub fn dashed_uuid_from_hex(raw: &str) -> AppResult<MinecraftUuid> {
     uuid::Uuid::parse_str(raw.trim()).map_err(|err| {
-        AppError::Account(format!("Minecraft returned an invalid profile id `{raw}`: {err}"))
+        AppError::Account(format!(
+            "Minecraft returned an invalid profile id `{raw}`: {err}"
+        ))
     })
 }
 
@@ -317,10 +370,7 @@ impl MicrosoftAuth {
             ("grant_type", "authorization_code"),
             ("code", code),
             ("redirect_uri", redirect_uri),
-            (
-                "scope",
-                if legacy { MSA_LEGACY_SCOPE } else { MSA_SCOPE },
-            ),
+            ("scope", if legacy { MSA_LEGACY_SCOPE } else { MSA_SCOPE }),
         ];
         if !legacy {
             params.push(("code_verifier", verifier));
@@ -352,10 +402,7 @@ impl MicrosoftAuth {
         // issues a code for that same client.
         let mut params = vec![
             ("client_id", self.client_id.as_str()),
-            (
-                "scope",
-                if legacy { MSA_LEGACY_SCOPE } else { MSA_SCOPE },
-            ),
+            ("scope", if legacy { MSA_LEGACY_SCOPE } else { MSA_SCOPE }),
         ];
         if legacy {
             params.push(("response_type", "device_code"));
@@ -397,12 +444,10 @@ impl MicrosoftAuth {
     /// Honours `authorization_pending` / `slow_down` exactly as the spec asks,
     /// and gives up at `expires_in` so a forgotten prompt cannot leak a task.
     pub async fn poll_device_code(&self, prompt: &DeviceCodePrompt) -> AppResult<MsaTokenResponse> {
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(
-            u64::try_from(prompt.expires_in).unwrap_or(900),
-        );
-        let mut interval = std::time::Duration::from_secs(
-            u64::try_from(prompt.interval).unwrap_or(5),
-        );
+        let deadline = tokio::time::Instant::now()
+            + std::time::Duration::from_secs(u64::try_from(prompt.expires_in).unwrap_or(900));
+        let mut interval =
+            std::time::Duration::from_secs(u64::try_from(prompt.interval).unwrap_or(5));
 
         loop {
             if tokio::time::Instant::now() >= deadline {
@@ -467,10 +512,7 @@ impl MicrosoftAuth {
             ("client_id", self.client_id.as_str()),
             ("grant_type", "refresh_token"),
             ("refresh_token", refresh_token),
-            (
-                "scope",
-                if legacy { MSA_LEGACY_SCOPE } else { MSA_SCOPE },
-            ),
+            ("scope", if legacy { MSA_LEGACY_SCOPE } else { MSA_SCOPE }),
         ];
         let response = self
             .http
@@ -513,6 +555,7 @@ impl MicrosoftAuth {
             .http
             .post(XBL_AUTHORIZE_URL)
             .header("Accept", "application/json")
+            .header("x-xbl-contract-version", "1")
             .json(&payload)
             .send()
             .await
@@ -527,25 +570,14 @@ impl MicrosoftAuth {
             )));
         }
 
-        let xbl: XblResponse = response.json().await?;
-        let user_hash = xbl
-            .display_claims
-            .and_then(|claims| claims.xui.into_iter().next())
-            .and_then(|claim| claim.uhs)
-            .ok_or_else(|| {
-                AppError::Account("Xbox Live response did not include a user hash".to_string())
-            })?;
-
-        Ok(XblToken {
-            token: xbl.token,
-            user_hash,
-        })
+        let body = response.text().await.unwrap_or_default();
+        parse_xbl_user_token(&body)
     }
 
     /// Step 2: XBL token → XSTS token (this is where account problems surface).
-    async fn authorize_xsts(&self, xbl_token: &str) -> AppResult<XstsToken> {
+    async fn authorize_xsts(&self, xbl: &XblToken) -> AppResult<XstsToken> {
         let payload = serde_json::json!({
-            "Properties": { "SandboxId": "RETAIL", "UserTokens": [xbl_token] },
+            "Properties": { "SandboxId": "RETAIL", "UserTokens": [xbl.token] },
             "RelyingParty": MC_RELYING_PARTY,
             "TokenType": "JWT"
         });
@@ -554,6 +586,7 @@ impl MicrosoftAuth {
             .http
             .post(XSTS_AUTHORIZE_URL)
             .header("Accept", "application/json")
+            .header("x-xbl-contract-version", "1")
             .json(&payload)
             .send()
             .await
@@ -580,19 +613,7 @@ impl MicrosoftAuth {
             )));
         }
 
-        let xsts: XblResponse = serde_json::from_str(&body)?;
-        let claim = xsts
-            .display_claims
-            .and_then(|claims| claims.xui.into_iter().next())
-            .ok_or_else(|| {
-                AppError::Account("Xbox Live token had no identity claims".to_string())
-            })?;
-
-        Ok(XstsToken {
-            token: xsts.token,
-            user_hash: claim.uhs.unwrap_or_default(),
-            xuid: claim.xid.unwrap_or_default(),
-        })
+        parse_xsts_token(&body, &xbl.user_hash)
     }
 
     /// Step 3: XSTS token → Mojang access token.
@@ -685,12 +706,9 @@ impl MicrosoftAuth {
     }
 
     /// Full exchange: MSA tokens → verified Mojang identity.
-    pub async fn complete_login(
-        &self,
-        msa: &MsaTokenResponse,
-    ) -> AppResult<MsaLoginOutcome> {
+    pub async fn complete_login(&self, msa: &MsaTokenResponse) -> AppResult<MsaLoginOutcome> {
         let xbl = self.authenticate_xbox(&msa.access_token).await?;
-        let xsts = self.authorize_xsts(&xbl.token).await?;
+        let xsts = self.authorize_xsts(&xbl).await?;
         let session = self.login_with_xbox(&xsts).await?;
         let profile = self.fetch_profile(&session.access_token).await?;
         let uuid = profile.uuid()?;
@@ -815,7 +833,9 @@ pub async fn fetch_skin_from_session_server(
 
     let payload: serde_json::Value = response.json().await?;
     let mut encoded = None;
-    if let Some(properties) = payload.get("properties").and_then(|properties| properties.as_array())
+    if let Some(properties) = payload
+        .get("properties")
+        .and_then(|properties| properties.as_array())
     {
         for property in properties {
             if property.get("name").and_then(|name| name.as_str()) == Some("textures") {
@@ -841,7 +861,10 @@ pub async fn fetch_skin_from_session_server(
 
     Ok(SkinProfile {
         model: skin
-            .and_then(|skin| skin.pointer("/metadata/model").and_then(|model| model.as_str()))
+            .and_then(|skin| {
+                skin.pointer("/metadata/model")
+                    .and_then(|model| model.as_str())
+            })
             .map(|model| {
                 if model.eq_ignore_ascii_case("slim") {
                     SkinModel::Slim
@@ -917,7 +940,10 @@ mod tests {
         assert_eq!(parsed.path(), "/oauth20_authorize.srf");
 
         let params: std::collections::HashMap<_, _> = parsed.query_pairs().collect();
-        assert_eq!(params.get("client_id").map(|v| v.as_ref()), Some(MSA_CLIENT_ID));
+        assert_eq!(
+            params.get("client_id").map(|v| v.as_ref()),
+            Some(MSA_CLIENT_ID)
+        );
         assert_eq!(
             params.get("redirect_uri").map(|v| v.as_ref()),
             Some(MSA_LEGACY_REDIRECT_URI)
@@ -931,8 +957,56 @@ mod tests {
     }
 
     #[test]
+    fn xbox_user_hash_is_read_from_lowercase_xui() {
+        // Shape documented by wiki.vg and returned by user.auth.xboxlive.com.
+        // Browser callback and device code both pass this body through
+        // `complete_login` → `authenticate_xbox`.
+        let body = r#"{
+            "IssueInstant": "2020-12-07T19:52:08.4463796Z",
+            "NotAfter": "2020-12-21T19:52:08.4463796Z",
+            "Token": "xbl-token",
+            "DisplayClaims": { "xui": [ { "uhs": "1234567890" } ] }
+        }"#;
+        let token = parse_xbl_user_token(body).expect("user hash");
+        assert_eq!(token.token, "xbl-token");
+        assert_eq!(token.user_hash, "1234567890");
+    }
+
+    #[test]
+    fn xsts_keeps_the_user_hash_and_xuid() {
+        let body = r#"{
+            "Token": "xsts-token",
+            "DisplayClaims": { "xui": [ { "uhs": "1234567890", "xid": "2535412345678901" } ] }
+        }"#;
+        let token = parse_xsts_token(body, "1234567890").expect("xsts");
+        assert_eq!(token.user_hash, "1234567890");
+        assert_eq!(token.xuid, "2535412345678901");
+        assert_eq!(
+            format!("XBL3.0 x={};{}", token.user_hash, token.token),
+            "XBL3.0 x=1234567890;xsts-token"
+        );
+    }
+
+    #[test]
+    fn xsts_falls_back_to_the_xbox_live_user_hash() {
+        let body = r#"{ "Token": "xsts-token", "DisplayClaims": { "xui": [ { "xid": "99" } ] } }"#;
+        let token = parse_xsts_token(body, "from-xbl").expect("fallback hash");
+        assert_eq!(token.user_hash, "from-xbl");
+        assert_eq!(token.xuid, "99");
+    }
+
+    #[test]
+    fn xbox_response_without_a_user_hash_is_an_account_error() {
+        let error = parse_xbl_user_token(r#"{ "Token": "xbl-token" }"#).expect_err("missing");
+        assert!(error.to_string().contains("did not include a user hash"));
+    }
+
+    #[test]
     fn xbox_ticket_prefix_follows_the_token_shape() {
-        assert_eq!(xbox_rps_ticket("EwAoOpaqueLiveToken"), "EwAoOpaqueLiveToken");
+        assert_eq!(
+            xbox_rps_ticket("EwAoOpaqueLiveToken"),
+            "EwAoOpaqueLiveToken"
+        );
         assert_eq!(
             xbox_rps_ticket("header.payload.sig"),
             "d=header.payload.sig"
@@ -948,8 +1022,14 @@ mod tests {
         let parsed = url::Url::parse(&url).expect("parses");
 
         let params: std::collections::HashMap<_, _> = parsed.query_pairs().collect();
-        assert_eq!(params.get("client_id").map(|v| v.as_ref()), Some(MSA_CLIENT_ID));
-        assert_eq!(params.get("code_challenge_method").map(|v| v.as_ref()), Some("S256"));
+        assert_eq!(
+            params.get("client_id").map(|v| v.as_ref()),
+            Some(MSA_CLIENT_ID)
+        );
+        assert_eq!(
+            params.get("code_challenge_method").map(|v| v.as_ref()),
+            Some("S256")
+        );
         assert_eq!(
             params.get("code_challenge").map(|v| v.as_ref()),
             Some(pkce.challenge.as_str())
@@ -990,7 +1070,10 @@ mod tests {
         }))
         .expect("profile fixture");
 
-        assert_eq!(profile.uuid().expect("uuid").to_string(), "069a79f4-44e9-4726-a5be-fca90e38aaf5");
+        assert_eq!(
+            profile.uuid().expect("uuid").to_string(),
+            "069a79f4-44e9-4726-a5be-fca90e38aaf5"
+        );
         let skin = profile.active_skin();
         assert_eq!(skin.model, SkinModel::Slim);
         assert_eq!(skin.skin_url.as_deref(), Some("https://skin"));
@@ -1019,10 +1102,10 @@ mod tests {
     #[test]
     fn oauth_errors_are_summarized() {
         // A known but self-explanatory code stays verbatim plus its hint.
-        assert!(
-            summarize_oauth_error(r#"{"error":"invalid_grant","error_description":"expired"}"#)
-                .starts_with("expired")
-        );
+        assert!(summarize_oauth_error(
+            r#"{"error":"invalid_grant","error_description":"expired"}"#
+        )
+        .starts_with("expired"));
         assert_eq!(
             oauth_error_code(r#"{"error":"authorization_pending"}"#).as_deref(),
             Some("authorization_pending")

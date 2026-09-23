@@ -1,32 +1,148 @@
-import { useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Stat } from "@/components/ui/feedback";
 import { useRefreshAccount, useRefreshSkin } from "@/hooks/queries";
-import { bodyUrl, bodyUrlFallback, capeUrl, fallbackGradient, monogram } from "@/lib/skins";
+import {
+  bodyUrl,
+  bodyUrlFallback,
+  capeUrl,
+  elySkinUrl,
+  fallbackGradient,
+  monogram,
+  publicTextureUrl,
+  textureSlices,
+  type Tile,
+} from "@/lib/skins";
 import { cn } from "@/lib/utils";
-import { PROVIDER_LABEL, type AccountSummary } from "@/types/account";
+import { PROVIDER_LABEL, type AccountSummary, type SkinModel } from "@/types/account";
+
+/** Front faces of the 64×64 layout. Slim arms are 3px wide. */
+function frontTiles(model: SkinModel): Record<string, Tile> {
+  const arm = model === "slim" ? 3 : 4;
+  return {
+    head: { x: 8, y: 8, w: 8, h: 8 },
+    hat: { x: 40, y: 8, w: 8, h: 8 },
+    body: { x: 20, y: 20, w: 8, h: 12 },
+    bodyOverlay: { x: 20, y: 36, w: 8, h: 12 },
+    rightArm: { x: 44, y: 20, w: arm, h: 12 },
+    rightArmOverlay: { x: 44, y: 36, w: arm, h: 12 },
+    leftArm: { x: 36, y: 52, w: arm, h: 12 },
+    leftArmOverlay: { x: 52, y: 52, w: arm, h: 12 },
+    rightLeg: { x: 4, y: 20, w: 4, h: 12 },
+    rightLegOverlay: { x: 4, y: 36, w: 4, h: 12 },
+    leftLeg: { x: 20, y: 52, w: 4, h: 12 },
+    leftLegOverlay: { x: 4, y: 52, w: 4, h: 12 },
+  };
+}
+
+function SkinPart({
+  url,
+  base,
+  overlay,
+  scale,
+  className,
+}: {
+  url: string;
+  base: Tile;
+  overlay?: Tile;
+  scale: number;
+  className?: string;
+}) {
+  return (
+    <span
+      className={cn("relative block [image-rendering:pixelated]", className)}
+      style={textureSlices(url, base, scale) as CSSProperties}
+    >
+      {overlay ? (
+        <span
+          className="absolute inset-0 [image-rendering:pixelated]"
+          style={{
+            ...(textureSlices(url, overlay, scale) as CSSProperties),
+            width: "100%",
+            height: "100%",
+          }}
+        />
+      ) : null}
+    </span>
+  );
+}
+
+/** Front view sliced from the provider texture. mc-heads does not know Ely.by skins. */
+export function SkinFigure({
+  url,
+  model,
+  height = 224,
+}: {
+  url: string;
+  model: SkinModel;
+  height?: number;
+}) {
+  const tiles = frontTiles(model);
+  const scale = height / 32;
+  const arm = model === "slim" ? 3 : 4;
+  const width = (arm * 2 + 8) * scale;
+  return (
+    <span className="relative mb-2 block" style={{ width, height }}>
+      <span className="absolute" style={{ left: arm * scale, top: 0 }}>
+        <SkinPart url={url} base={tiles.head!} overlay={tiles.hat} scale={scale} />
+      </span>
+      <span className="absolute" style={{ left: 0, top: 8 * scale }}>
+        <SkinPart url={url} base={tiles.rightArm!} overlay={tiles.rightArmOverlay} scale={scale} />
+      </span>
+      <span className="absolute" style={{ left: arm * scale, top: 8 * scale }}>
+        <SkinPart url={url} base={tiles.body!} overlay={tiles.bodyOverlay} scale={scale} />
+      </span>
+      <span className="absolute" style={{ left: (arm + 8) * scale, top: 8 * scale }}>
+        <SkinPart url={url} base={tiles.leftArm!} overlay={tiles.leftArmOverlay} scale={scale} />
+      </span>
+      <span className="absolute" style={{ left: arm * scale, top: 20 * scale }}>
+        <SkinPart url={url} base={tiles.rightLeg!} overlay={tiles.rightLegOverlay} scale={scale} />
+      </span>
+      <span className="absolute" style={{ left: (arm + 4) * scale, top: 20 * scale }}>
+        <SkinPart url={url} base={tiles.leftLeg!} overlay={tiles.leftLegOverlay} scale={scale} />
+      </span>
+    </span>
+  );
+}
 
 /**
  * Skin, cape and model preview for an account.
  *
- * Order: the provider's texture (rendered through mc-heads/crafatar from the
- * account id) → crafatar → a generated avatar. Offline profiles render through
- * the same services, which draw the default Steve/Alex skin for unknown names —
- * so an offline account always shows *something* recognisable instead of nothing.
+ * Ely.by and Mojang textures are sliced from the PNG the account already
+ * carries. mc-heads is only a fallback for Microsoft and offline profiles:
+ * an Ely.by UUID is not a Mojang profile, so that service draws Steve.
  */
 export function SkinPreview({ account, className }: { account: AccountSummary; className?: string }) {
-  const [level, setLevel] = useState(0);
   const refresh = useRefreshSkin();
   const refreshAccount = useRefreshAccount();
-  const cape = capeUrl(account);
+  const cape = publicTextureUrl(capeUrl(account));
+  const texture =
+    account.provider === "ely_by" ? elySkinUrl(account) : publicTextureUrl(account.skin.skinUrl);
+  const [mode, setMode] = useState<"loading" | "texture" | "heads" | "fallback" | "mono">("loading");
 
-  const bodySrc =
-    level === 0 ? bodyUrl(account, 320) : level === 1 ? bodyUrlFallback(account, 320) : null;
+  useEffect(() => {
+    if (!texture) {
+      setMode(account.provider === "ely_by" ? "mono" : "heads");
+      return;
+    }
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => {
+      if (!cancelled) setMode("texture");
+    };
+    img.onerror = () => {
+      if (!cancelled) setMode(account.provider === "ely_by" ? "mono" : "heads");
+    };
+    img.src = texture;
+    return () => {
+      cancelled = true;
+    };
+  }, [texture, account.provider, account.id]);
 
-  const showMonogram = level >= 2;
+  const bodySrc = mode === "heads" ? bodyUrl(account, 320) : mode === "fallback" ? bodyUrlFallback(account, 320) : null;
   const canRefresh = account.provider !== "offline";
 
   return (
@@ -43,12 +159,14 @@ export function SkinPreview({ account, className }: { account: AccountSummary; c
 
       <CardContent className="flex flex-col gap-4">
         <div className="relative flex h-72 items-end justify-center rounded-xl border border-white/8 bg-[radial-gradient(120%_90%_at_50%_0%,rgba(255,255,255,0.08),transparent)]">
-          {showMonogram ? (
+          {mode === "texture" && texture ? (
+            <SkinFigure url={texture} model={account.skin.model} />
+          ) : mode === "mono" || mode === "loading" ? (
             <div
               className="mb-6 flex size-32 items-center justify-center rounded-2xl text-4xl font-semibold text-white/90"
               style={{ background: fallbackGradient(account.username) }}
             >
-              {monogram(account.username)}
+              {mode === "loading" ? "" : monogram(account.username)}
             </div>
           ) : (
             <>
@@ -56,7 +174,7 @@ export function SkinPreview({ account, className }: { account: AccountSummary; c
                 src={bodySrc!}
                 alt={`${account.username}'s skin`}
                 className="mb-2 h-64 object-contain [image-rendering:pixelated] drop-shadow-[0_18px_35px_rgba(0,0,0,0.55)]"
-                onError={() => setLevel((current) => current + 1)}
+                onError={() => setMode((current) => (current === "heads" ? "fallback" : "mono"))}
               />
               {cape ? (
                 <img

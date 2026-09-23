@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { activityPresentation } from "./activity";
+import { activityPresentation, selectStatusJob } from "./activity";
 import type { ProgressEvent } from "@/types/modpack";
 
 function job(partial: Partial<ProgressEvent> & Pick<ProgressEvent, "label" | "stage" | "kind">): ProgressEvent {
@@ -126,5 +126,54 @@ describe("activityPresentation", () => {
     );
     expect(published.mode).toBe("steady");
     expect(published.showProgress).toBe(false);
+  });
+
+  it("does not keep a progress bar on a finished download", () => {
+    const view = activityPresentation(
+      job({
+        kind: "launch",
+        stage: "done",
+        label: "authlib-injector (Ely.by agent)",
+        finished: true,
+        completedUnits: 1,
+        totalUnits: 1,
+      }),
+    );
+    expect(view.mode).not.toBe("work");
+    expect(view.showProgress).toBe(false);
+  });
+
+  it("drops a finished authlib download and keeps a live host", () => {
+    const download = job({
+      jobId: "authlib",
+      kind: "launch",
+      stage: "done",
+      label: "authlib-injector (Ely.by agent)",
+      finished: true,
+      completedUnits: 1,
+      totalUnits: 1,
+    });
+    const host = job({
+      jobId: "host",
+      kind: "p2p_host",
+      stage: "resolving",
+      label: "Hosting Survival",
+    });
+    expect(selectStatusJob([download, host])?.jobId).toBe("host");
+    expect(selectStatusJob([download])).toBeNull();
+  });
+
+  it("still shows a download that has not finished", () => {
+    const download = job({
+      jobId: "authlib",
+      kind: "launch",
+      stage: "downloading",
+      label: "authlib-injector (Ely.by agent)",
+      completedUnits: 2,
+      totalUnits: 4,
+    });
+    expect(selectStatusJob([download])?.jobId).toBe("authlib");
+    expect(activityPresentation(download).status).toBe("Downloading");
+    expect(activityPresentation(download).showProgress).toBe(true);
   });
 });

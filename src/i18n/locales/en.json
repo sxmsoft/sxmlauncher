@@ -82,7 +82,9 @@
     "subtitle": "Modpacks from Modrinth and CurseForge. A pack becomes its own instance; single mods install into the one you pick.",
     "target": "target",
     "choose": "Choose an instance…",
-    "custom": "Custom packs"
+    "custom": "Custom packs",
+    "inLibrary": "In Library",
+    "packOwnInstance": "Packs install with their own game version."
   },
   "host": {
     "title": "Host",
@@ -107,7 +109,13 @@
     "addAction": "Add an account",
     "active": "Active",
     "previewing": "Preview",
-    "connected": "Microsoft account connected"
+    "connected": "Microsoft account connected",
+    "uploadTitle": "Upload skin",
+    "uploadMicrosoft": "PNG goes to your Minecraft account.",
+    "uploadEly": "Ely.by skins are changed on ely.by.",
+    "uploadOffline": "Offline profiles have no skin upload.",
+    "uploadDrop": "You can also drop a PNG on this page.",
+    "choosePng": "Choose PNG…"
   },
   "settings": {
     "title": "Settings",

@@ -110,6 +110,22 @@ pub struct ModVersion {
     pub dependencies: Vec<ModDependency>,
 }
 
+impl ModVersion {
+    /// `false` when the registry listed a version with no file URL.
+    pub fn is_downloadable(&self) -> bool {
+        !self.download_url.is_empty()
+    }
+}
+
+/// First version that can actually be fetched.
+///
+/// Modrinth and CurseForge return newest-first, so this is the newest
+/// downloadable release. A pack install uses this instead of guessing a
+/// Minecraft version: the file itself names the game version and the mods.
+pub fn newest_downloadable(versions: impl IntoIterator<Item = ModVersion>) -> Option<ModVersion> {
+    versions.into_iter().find(ModVersion::is_downloadable)
+}
+
 /// What kind of relation a dependency expresses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -459,5 +475,36 @@ mod tests {
             Some(ModSource::CurseForge)
         );
         assert_eq!(ModSource::CurseForge.as_str(), "curseforge");
+    }
+
+    fn version(url: &str, number: &str) -> ModVersion {
+        ModVersion {
+            id: number.into(),
+            project_id: "pack".into(),
+            name: number.into(),
+            version_number: number.into(),
+            version_type: "release".into(),
+            source: ModSource::Modrinth,
+            game_versions: vec!["1.21.1".into()],
+            loaders: vec!["fabric".into()],
+            downloads: 1,
+            file_name: format!("{number}.mrpack"),
+            download_url: url.into(),
+            hashes: ModHashes::default(),
+            file_size: 10,
+            published_at: None,
+            dependencies: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn newest_downloadable_skips_a_listing_with_no_file() {
+        let picked = newest_downloadable([
+            version("", "empty"),
+            version("https://cdn.modrinth.com/pack.mrpack", "real"),
+        ])
+        .expect("a file");
+        assert_eq!(picked.version_number, "real");
+        assert!(picked.is_downloadable());
     }
 }

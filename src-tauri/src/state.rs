@@ -24,7 +24,7 @@ use crate::models::progress::{ProgressEvent, ProgressSink};
 use crate::models::version::{merge_profiles, VersionJson};
 use crate::mods::ModEngine;
 use crate::network::{
-    localnet::LanManager, holepunch::PunchConfig, DirectTransport, RelayTransport, SessionManager,
+    holepunch::PunchConfig, localnet::LanManager, DirectTransport, RelayTransport, SessionManager,
     TransportRegistry,
 };
 use crate::store::Database;
@@ -144,7 +144,10 @@ impl AppState {
     /// (retained messages on a public broker carry the listings), which is how
     /// the launcher is online out of the box. A non-empty `mqtt_broker` picks
     /// it; an empty one falls back to the legacy Redis URL for self-hosters.
-    pub async fn connect_directory(&self, settings: &AppSettings) -> AppResult<Arc<SessionManager>> {
+    pub async fn connect_directory(
+        &self,
+        settings: &AppSettings,
+    ) -> AppResult<Arc<SessionManager>> {
         let directory: Arc<dyn crate::network::Directory> =
             if !settings.mqtt_broker.trim().is_empty() {
                 Arc::new(
@@ -189,9 +192,9 @@ impl AppState {
             Arc::new(crate::network::MemoryDirectory::new());
         let punch = PunchConfig::from_servers(&settings.stun_servers);
         let transports = Arc::new(TransportRegistry::new(
-            Arc::new(DirectTransport::new("0.0.0.0:0".parse().map_err(|err| {
-                AppError::Config(format!("invalid bind address: {err}"))
-            })?)),
+            Arc::new(DirectTransport::new("0.0.0.0:0".parse().map_err(
+                |err| AppError::Config(format!("invalid bind address: {err}")),
+            )?)),
             Arc::new(RelayTransport::new(settings.relay_url.clone())),
         ));
         let manager = Arc::new(SessionManager::new(
@@ -247,7 +250,16 @@ impl AppState {
 
     /// Persist settings and rebuild the managers that depend on them.
     pub async fn apply_settings(&self, settings: AppSettings) -> AppResult<AppSettings> {
-        let sanitized = settings.sanitized();
+        let mut sanitized = settings.sanitized();
+        if sanitized.ui_background_kind != "aurora" {
+            if let Some(path) = sanitized.ui_background_path.clone() {
+                let source = std::path::PathBuf::from(&path);
+                if source.is_file() {
+                    let imported = self.paths.import_wallpaper(&source)?;
+                    sanitized.ui_background_path = Some(imported.to_string_lossy().into_owned());
+                }
+            }
+        }
         self.db.save_app_settings(&sanitized)?;
         sanitized.save(&self.paths)?;
 

@@ -95,6 +95,14 @@ let instances: Instance[] = [
     modCount: 48,
     status: "update_available",
     requiredJavaMajor: 21,
+    sourcePack: {
+      source: "modrinth",
+      projectId: "fabulously-optimized",
+      versionId: "6.4.0",
+      name: "Fabulously Optimized",
+      versionNumber: "6.4.0",
+      iconUrl: null,
+    },
   }),
 ];
 
@@ -106,6 +114,21 @@ const account: AccountSummary = {
   skin: {
     model: "classic",
     skinUrl: "https://textures.minecraft.net/texture/1a4af718455d4aab528e7a61f86fa25e6a369d1768dcb13f7df319a713eb810b",
+    capeUrl: null,
+  },
+  hasStoredCredentials: true,
+  expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+  lastUsedAt: now(),
+};
+
+const elyAccount: AccountSummary = {
+  id: "f45b2206-a023-4803-9faa-0a5729865586",
+  provider: "ely_by",
+  username: "ensxm",
+  uuid: "f45b2206-a023-4803-9faa-0a5729865586",
+  skin: {
+    model: "classic",
+    skinUrl: "http://ely.by/storage/skins/c8f42eb2b7fdd92a2a8d7189a34cc9a2.png",
     capeUrl: null,
   },
   hasStoredCredentials: true,
@@ -455,7 +478,7 @@ export function mockResponse(command: string, args?: Record<string, unknown>): u
 
     // --- accounts -------------------------------------------------------
     case "account_list":
-      return [account, offlineAccount];
+      return [account, elyAccount, offlineAccount];
     case "account_active":
       return account;
     case "account_set_active":
@@ -466,8 +489,15 @@ export function mockResponse(command: string, args?: Record<string, unknown>): u
       return { ...offlineAccount, username: String(args?.username ?? "Player") };
     case "account_refresh":
       return account;
-    case "account_refresh_skin":
-      return (args?.id === offlineAccount.id ? offlineAccount : account).skin;
+    case "account_refresh_skin": {
+      const target =
+        args?.id === offlineAccount.id
+          ? offlineAccount
+          : args?.id === elyAccount.id
+            ? elyAccount
+            : account;
+      return target.skin;
+    }
     case "account_upload_skin": {
       const target = args?.id === offlineAccount.id ? offlineAccount : account;
       const model = args?.model === "slim" ? "slim" : "classic";

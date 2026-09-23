@@ -38,6 +38,7 @@ export function ModCard({
   onInstall,
   onPickVersion,
   installing,
+  installed = false,
   extraActions,
   onOpenDetails,
   className,
@@ -48,6 +49,8 @@ export function ModCard({
   /** Opens the version picker — omitted when there is nothing to choose from. */
   onPickVersion?: () => void;
   installing: boolean;
+  /** Pack is already in an instance. The button is a status, not an install. */
+  installed?: boolean;
   /** Icon actions rendered left of the install button (add-to-pack, download). */
   extraActions?: ReactNode;
   /** Opens the full project view (description + version history). */
@@ -128,8 +131,8 @@ export function ModCard({
               </Button>
             </Hint>
           ) : null}
-          <Button size="sm" onClick={onInstall} loading={installing}>
-            <Plus className="size-3.5" /> {actionLabel}
+          <Button size="sm" onClick={onInstall} loading={installing && !installed} disabled={installed}>
+            {installed ? null : <Plus className="size-3.5" />} {actionLabel}
           </Button>
         </div>
       </CardFooter>
