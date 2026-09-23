@@ -203,6 +203,9 @@ function HostingStatus({
             <Copy className="size-3.5" />
             {copied ? "Copied" : "Copy code"}
           </Button>
+          <span className="text-muted-foreground text-[11px]">
+            Valid while this world is hosted. It drops a few minutes after you stop.
+          </span>
           {status.publicEndpoint ? (
             <Hint label="Public endpoint other peers dial (STUN discovery)">
               <Badge variant="outline">{status.publicEndpoint}</Badge>

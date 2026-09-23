@@ -6,8 +6,11 @@
 
 import type { TFunction } from "i18next";
 
+import { translateInviteMessage } from "@/lib/invite-errors";
+
 const STATUS_KEYS: Record<string, string> = {
   "Service Running": "activity.status.serviceRunning",
+  Reconnecting: "activity.status.reconnecting",
   Listening: "activity.status.listening",
   "Waiting for players": "activity.status.waiting",
   "Session published": "activity.status.published",
@@ -29,6 +32,8 @@ const STATUS_KEYS: Record<string, string> = {
 };
 
 export function translateActivityStatus(status: string, t: TFunction): string {
+  const invite = translateInviteMessage(status, t);
+  if (invite !== status) return invite;
   const key = STATUS_KEYS[status];
   return key ? t(key) : status;
 }

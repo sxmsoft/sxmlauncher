@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { IndeterminateProgress, Progress } from "@/components/ui/progress";
 import { useNetworkStatus, useRunningInstances } from "@/hooks/queries";
 import { translateActivityStatus } from "@/i18n/status";
-import { activityPresentation, selectStatusJob } from "@/lib/activity";
+import { activityPresentation, coalesceActivityJobs, selectStatusJob } from "@/lib/activity";
 import { cn, formatBytes } from "@/lib/utils";
 import { aggregateProgress, useJobsStore } from "@/stores/jobs";
 import { useSessionsStore } from "@/stores/sessions";
@@ -26,7 +26,7 @@ import { useSessionsStore } from "@/stores/sessions";
  * pressing ✕ here behave the same.
  */
 export function StatusStrip() {
-  const jobs = useJobsStore((state) => state.jobs);
+  const jobs = coalesceActivityJobs(useJobsStore((state) => state.jobs));
   const cancelling = useJobsStore((state) => state.cancelling);
   const cancel = useJobsStore((state) => state.cancel);
   const dismiss = useJobsStore((state) => state.dismiss);

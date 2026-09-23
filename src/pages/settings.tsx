@@ -415,7 +415,7 @@ function NetworkSection({ draft, patch }: SectionProps) {
         <CardContent className="flex flex-col gap-4">
           <Field
             label="Directory broker"
-            hint="The embedded directory meets friends on a public MQTT broker — no server to run. Leave empty to use a self-hosted Redis instead."
+            hint="Used when Redis is still the localhost default. A remote Redis URL below (shared Upstash) is the directory both launchers share, and it replaces this broker."
           >
             <div className="flex gap-2">
               <Input
@@ -454,7 +454,7 @@ function NetworkSection({ draft, patch }: SectionProps) {
 
           <Field
             label="Redis URL (advanced)"
-            hint="Only used when the broker field above is empty. Self-hosting the old Redis directory is still supported."
+            hint="Paste the same rediss:// URL on every launcher. Localhost is ignored while a broker is set; a remote host is the shared directory. The password stays on this device."
           >
             <div className="flex gap-2">
               <Input

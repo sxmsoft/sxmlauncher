@@ -114,8 +114,8 @@ impl ConnectCode {
             }
         }
 
-        let flags = (u8::from(self.flags.password_protected))
-            | (u8::from(self.flags.whitelisted) << 1);
+        let flags =
+            (u8::from(self.flags.password_protected)) | (u8::from(self.flags.whitelisted) << 1);
         bytes.push(flags);
 
         let checksum = crc32(&bytes);
@@ -195,6 +195,12 @@ impl ConnectCode {
         format_code(&self.to_bytes())
     }
 
+    /// Canonical `SXM1-…` form. Sloppy pastes (case, spaces, missing dashes)
+    /// collapse to the same string the host stored, so Redis and MQTT keys match.
+    pub fn canonical_share_string(input: &str) -> AppResult<String> {
+        Ok(Self::parse(input)?.to_share_string())
+    }
+
     /// Parse the human-shareable string (accepts the prefix, dashes and spaces).
     pub fn parse(input: &str) -> AppResult<Self> {
         let compact: String = input
@@ -204,15 +210,22 @@ impl ConnectCode {
             .filter(|c| c.is_ascii_alphanumeric())
             .collect();
 
-        let without_prefix = compact
-            .strip_prefix(CODE_PREFIX)
-            .ok_or_else(|| {
-                AppError::Transport(format!("connection codes start with {CODE_PREFIX}"))
-            })?;
+        let without_prefix = compact.strip_prefix(CODE_PREFIX).ok_or_else(|| {
+            AppError::Transport(format!("connection codes start with {CODE_PREFIX}"))
+        })?;
 
         let bytes = base32_decode(without_prefix)?;
         Self::from_bytes(&bytes)
     }
+}
+
+/// Key form for a share code.
+///
+/// A full code is re-emitted in the canonical grouped form. Anything that does
+/// not parse (tests, partial input) is only trimmed and upper-cased, which keeps
+/// the historical `SXM1-ABCD` keys stable.
+pub fn normalize_share_code(input: &str) -> String {
+    ConnectCode::canonical_share_string(input).unwrap_or_else(|_| input.trim().to_uppercase())
 }
 
 /// First 8 bytes of a UUID, used as a short, collision-resistant peer handle.
@@ -270,7 +283,9 @@ fn base32_decode(input: &str) -> AppResult<Vec<u8>> {
             .iter()
             .position(|candidate| *candidate as char == character)
             .ok_or_else(|| {
-                AppError::Transport(format!("`{character}` is not a valid connection code character"))
+                AppError::Transport(format!(
+                    "`{character}` is not a valid connection code character"
+                ))
             })? as u32;
         buffer = (buffer << 5) | value;
         bits += 5;
@@ -337,17 +352,46 @@ mod tests {
             },
         )
         .expect("direct");
-        let relay = ConnectCode::relay(Uuid::new_v4(), 12, CodeFlags {
-            password_protected: true,
-            whitelisted: true,
-        });
+        let relay = ConnectCode::relay(
+            Uuid::new_v4(),
+            12,
+            CodeFlags {
+                password_protected: true,
+                whitelisted: true,
+            },
+        );
 
         for code in [&direct, &relay] {
             let bytes = code.to_bytes();
-            assert_eq!(bytes.len(), PAYLOAD_LEN, "wrong payload length for {code:?}");
+            assert_eq!(
+                bytes.len(),
+                PAYLOAD_LEN,
+                "wrong payload length for {code:?}"
+            );
             // And the shareable form must survive a full round trip.
-            assert_eq!(&ConnectCode::parse(&code.to_share_string()).expect("parse"), code);
+            assert_eq!(
+                &ConnectCode::parse(&code.to_share_string()).expect("parse"),
+                code
+            );
         }
+    }
+
+    #[test]
+    fn sloppy_pastes_share_one_canonical_key() {
+        let code = ConnectCode::relay(
+            Uuid::new_v4(),
+            7,
+            CodeFlags {
+                password_protected: false,
+                whitelisted: false,
+            },
+        );
+        let canonical = code.to_share_string();
+        let sloppy = canonical.to_lowercase().replace('-', "");
+        assert_eq!(normalize_share_code(&sloppy), canonical);
+        assert_eq!(normalize_share_code(&format!("  {canonical}  ")), canonical);
+        // Partial codes stay upper-case and do not grow a fake payload.
+        assert_eq!(normalize_share_code("sxm1-abcd"), "SXM1-ABCD");
     }
 
     #[test]
@@ -370,10 +414,14 @@ mod tests {
 
     #[test]
     fn corrupted_codes_are_rejected() {
-        let code = ConnectCode::relay(Uuid::new_v4(), 1, CodeFlags {
-            password_protected: false,
-            whitelisted: false,
-        });
+        let code = ConnectCode::relay(
+            Uuid::new_v4(),
+            1,
+            CodeFlags {
+                password_protected: false,
+                whitelisted: false,
+            },
+        );
         let mut bytes = code.to_bytes();
         bytes[3] ^= 0xff;
         let error = ConnectCode::from_bytes(&bytes).expect_err("must reject");
@@ -382,10 +430,14 @@ mod tests {
 
     #[test]
     fn wrong_prefix_and_unknown_version_are_rejected() {
-        let code = ConnectCode::relay(Uuid::new_v4(), 1, CodeFlags {
-            password_protected: false,
-            whitelisted: false,
-        });
+        let code = ConnectCode::relay(
+            Uuid::new_v4(),
+            1,
+            CodeFlags {
+                password_protected: false,
+                whitelisted: false,
+            },
+        );
 
         assert!(ConnectCode::parse("AAA-1234").is_err());
         assert!(ConnectCode::parse("").is_err());
@@ -397,10 +449,14 @@ mod tests {
 
     #[test]
     fn truncated_payloads_are_rejected() {
-        let code = ConnectCode::relay(Uuid::new_v4(), 1, CodeFlags {
-            password_protected: false,
-            whitelisted: false,
-        });
+        let code = ConnectCode::relay(
+            Uuid::new_v4(),
+            1,
+            CodeFlags {
+                password_protected: false,
+                whitelisted: false,
+            },
+        );
         let bytes = code.to_bytes();
         assert!(ConnectCode::from_bytes(&bytes[..10]).is_err());
     }
@@ -421,10 +477,14 @@ mod tests {
     #[test]
     fn ipv6_hosts_cannot_produce_a_direct_code() {
         let address: SocketAddr = "[2001:db8::1]:25565".parse().expect("addr");
-        assert!(ConnectCode::direct(Uuid::new_v4(), address, CodeFlags {
-            password_protected: false,
-            whitelisted: false,
-        })
+        assert!(ConnectCode::direct(
+            Uuid::new_v4(),
+            address,
+            CodeFlags {
+                password_protected: false,
+                whitelisted: false,
+            }
+        )
         .is_err());
     }
 }

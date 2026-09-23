@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { IndeterminateProgress, Progress } from "@/components/ui/progress";
 import { useKillInstance, useRunningInstances } from "@/hooks/queries";
 import { translateActivityStatus } from "@/i18n/status";
-import { activityPresentation } from "@/lib/activity";
+import { activityPresentation, coalesceActivityJobs } from "@/lib/activity";
 import { aggregateProgress, useJobsStore } from "@/stores/jobs";
 import { useUiStore } from "@/stores/ui";
 import type { JobKind, ProgressEvent } from "@/types/modpack";
@@ -59,7 +59,7 @@ export function ActivityFeed({
   onClose?: () => void;
 }) {
   const { t } = useTranslation();
-  const jobs = useJobsStore((state) => state.jobs);
+  const jobs = coalesceActivityJobs(useJobsStore((state) => state.jobs));
   const dismiss = useJobsStore((state) => state.dismiss);
   const clearFinished = useJobsStore((state) => state.clearFinished);
   const { data: runningGames } = useRunningInstances();

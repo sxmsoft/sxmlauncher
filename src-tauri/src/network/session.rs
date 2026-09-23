@@ -36,18 +36,18 @@ use crate::error::{AppError, AppResult};
 use crate::models::progress::{JobKind, JobStage, ProgressEvent, ProgressSink};
 use crate::models::server::{
     ConnectionDescriptor, ConnectionMode, JoinRejection, PeerEndpoint, PlayerCount,
-    ServerHeartbeat, ServerListing, ServerListingSummary, WhitelistPolicy,
+    ServerHeartbeat, ServerListing, ServerListingSummary, SignalingEnvelope, WhitelistPolicy,
     DEFAULT_HEARTBEAT_TTL_SECS, HEARTBEAT_INTERVAL_SECS,
 };
 use crate::network::bridge::{self, DEFAULT_SERVER_PORT};
-use crate::network::code::{CodeFlags, ConnectCode};
-use crate::network::directory::Directory;
+use crate::network::code::{normalize_share_code, CodeFlags, ConnectCode};
+use crate::network::directory::{Directory, InviteLookup};
 use crate::network::holepunch::{
     self, decode_punch, encode_punch, NatBehavior, PunchConfig, PunchKind, PUNCH_DATAGRAM_LEN,
 };
 use crate::network::transport::{
-    ByteCounters, CountingStream, Frame, FrameKind, TransportRegistry, ACK_TIMEOUT,
-    FRAME_OVERHEAD, MAX_FRAME_PAYLOAD, MAX_RETRIES,
+    ByteCounters, CountingStream, Frame, FrameKind, TransportRegistry, ACK_TIMEOUT, FRAME_OVERHEAD,
+    MAX_FRAME_PAYLOAD, MAX_RETRIES,
 };
 use crate::store::servers::P2pSessionRecord;
 use crate::store::Database;
@@ -170,13 +170,9 @@ impl HostSession {
             .await;
 
         let (bytes_up, bytes_down) = self.byte_counters.snapshot();
-        let _ = self.db.finish_p2p_session(
-            self.id,
-            Utc::now(),
-            bytes_up,
-            bytes_down,
-            None,
-        );
+        let _ = self
+            .db
+            .finish_p2p_session(self.id, Utc::now(), bytes_up, bytes_down, None);
         let _ = self.events.send(SessionEvent::Stopped { id: self.id });
         Ok(())
     }
@@ -237,7 +233,10 @@ pub struct GuestSession {
 impl GuestSession {
     /// Address to pass to Minecraft as `--server/--port`.
     pub fn connect_target(&self) -> (String, u16) {
-        (self.local_address.ip().to_string(), self.local_address.port())
+        (
+            self.local_address.ip().to_string(),
+            self.local_address.port(),
+        )
     }
 }
 
@@ -286,12 +285,7 @@ async fn sync_hosted_directory(
     share_code: &str,
     public: bool,
 ) -> AppResult<()> {
-    if public {
-        directory.publish_listing(listing).await?;
-    } else {
-        directory.save_listing(listing).await?;
-    }
-    directory.put_code(share_code, listing.id).await
+    directory.sync_session(listing, share_code, public).await
 }
 
 /// Owns every active host/guest session.
@@ -381,7 +375,7 @@ impl SessionManager {
                     sink.report(
                         ProgressEvent::started(JobKind::P2pHost, "NAT discovery failed")
                             .stage(JobStage::Registering)
-                            .detail(err.to_string()),
+                            .detail(format!("STUN_UNREACHABLE: {err}")),
                     )
                     .await;
                 }
@@ -506,13 +500,14 @@ impl SessionManager {
         let heartbeat_events = events.clone();
         let heartbeat_public = options.public;
         let heartbeat_code = share_code.clone();
+        let heartbeat_sink = sink.clone();
+        let heartbeat_name = options.name.clone();
         let guests_for_count = Arc::new(DashMap::<String, GuestConnection>::new());
         let count_source = guests_for_count.clone();
 
         let heartbeat = tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(
-                HEARTBEAT_INTERVAL_SECS,
-            ));
+            let mut ticker =
+                tokio::time::interval(std::time::Duration::from_secs(HEARTBEAT_INTERVAL_SECS));
             loop {
                 tokio::select! {
                     _ = heartbeat_cancel.cancelled() => break,
@@ -533,10 +528,46 @@ impl SessionManager {
                         )
                         .await
                         {
-                            let _ = heartbeat_events.send(SessionEvent::Error {
-                                id,
-                                message: err.to_string(),
-                            });
+                            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                            if heartbeat_cancel.is_cancelled() {
+                                break;
+                            }
+                            if let Err(retry) = sync_hosted_directory(
+                                &heartbeat_directory,
+                                &snapshot,
+                                &heartbeat_code,
+                                heartbeat_public,
+                            )
+                            .await
+                            {
+                                let message = format!("DIRECTORY_UNREACHABLE: {retry}");
+                                let _ = heartbeat_events.send(SessionEvent::Error {
+                                    id,
+                                    message: message.clone(),
+                                });
+                                heartbeat_sink
+                                    .report(
+                                        ProgressEvent::started(
+                                            JobKind::P2pHost,
+                                            "Reconnecting directory",
+                                        )
+                                        .stage(JobStage::Registering)
+                                        .detail(message),
+                                    )
+                                    .await;
+                                let _ = err;
+                            } else {
+                                heartbeat_sink
+                                    .report(
+                                        ProgressEvent::started(
+                                            JobKind::P2pHost,
+                                            format!("Hosting {heartbeat_name}"),
+                                        )
+                                        .stage(JobStage::Running)
+                                        .detail("Waiting for players"),
+                                    )
+                                    .await;
+                            }
                         }
                         let _ = heartbeat_directory
                             .publish_heartbeat(&ServerHeartbeat {
@@ -577,6 +608,13 @@ impl SessionManager {
         // frames to their tunnel task (see `run_host_demux`).
         if let Some(socket) = punch_socket {
             let socket = Arc::new(socket);
+            let signal_session = session.clone();
+            let signal_socket = socket.clone();
+            let signal_token = session_token.clone();
+            let signal_cancel = cancel.clone();
+            tokio::spawn(async move {
+                run_host_inbox(signal_socket, signal_session, signal_token, signal_cancel).await;
+            });
             let demux_session = session.clone();
             let demux_options = options.clone();
             let demux_token = session_token.clone();
@@ -599,6 +637,13 @@ impl SessionManager {
             id,
             behavior: nat_behavior,
         });
+
+        sink.report(
+            ProgressEvent::started(JobKind::P2pHost, format!("Hosting {}", options.name))
+                .stage(JobStage::Running)
+                .detail("Waiting for players"),
+        )
+        .await;
 
         self.hosts.insert(id, session.clone());
 
@@ -634,24 +679,43 @@ impl SessionManager {
     ) -> AppResult<Arc<GuestSession>> {
         let (listing, password_required) = match target {
             JoinTarget::ListingId { id } => {
-                let listing = self
-                    .directory
-                    .listing(id)
-                    .await?
-                    .ok_or_else(|| AppError::Directory("that world is offline now".to_string()))?;
+                let listing =
+                    self.directory.listing(id).await?.ok_or_else(|| {
+                        AppError::Directory("that world is offline now".to_string())
+                    })?;
                 let password_required = listing.password_protected;
                 (listing, password_required)
             }
             JoinTarget::Code { code } => {
-                let listing = self
-                    .directory
-                    .resolve_code(&code)
-                    .await?
-                    .ok_or_else(|| {
-                        AppError::Directory(
-                            "that connection code has expired or the host is offline".to_string(),
-                        )
-                    })?;
+                if ConnectCode::parse(&code).is_err() {
+                    return Err(AppError::Transport(
+                        "INVITE_MALFORMED: that connection code is incomplete or corrupted"
+                            .to_string(),
+                    ));
+                }
+                let code = normalize_share_code(&code);
+                let mut lookup = self.directory.lookup_invite(&code).await?;
+                if matches!(
+                    lookup,
+                    InviteLookup::Unknown | InviteLookup::ListingMissing { .. }
+                ) {
+                    // One heartbeat may be landing, or the listing TTL just rolled.
+                    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                    lookup = self.directory.lookup_invite(&code).await?;
+                }
+                let listing = match lookup {
+                    InviteLookup::Found(listing) if !listing.is_stale() => listing,
+                    InviteLookup::Found(_) | InviteLookup::ListingMissing { .. } => {
+                        return Err(AppError::Directory(
+                            "INVITE_LISTING_GONE: the host stopped refreshing this invite. Ask them to copy the code again.".to_string(),
+                        ));
+                    }
+                    InviteLookup::Unknown => {
+                        return Err(AppError::Directory(
+                            "INVITE_EXPIRED: that connection code has expired or the host is offline".to_string(),
+                        ));
+                    }
+                };
                 let password_required = listing.password_protected;
                 (listing, password_required)
             }
@@ -670,7 +734,20 @@ impl SessionManager {
         )
         .await;
 
-        let peer = self.transports.connect(&listing.connection, sink.clone()).await?;
+        let peer = match self
+            .transports
+            .connect(&listing.connection, sink.clone())
+            .await
+        {
+            Ok(peer) => peer,
+            Err(err) => {
+                let message = err.to_string();
+                if message.contains("JOIN_UNREACHABLE") || message.contains("INVITE_") {
+                    return Err(err);
+                }
+                return Err(AppError::Transport(format!("JOIN_UNREACHABLE: {message}")));
+            }
+        };
         let mode = peer.mode;
 
         // Caching failures must never block a join.
@@ -710,25 +787,31 @@ impl SessionManager {
 
         self.guests.insert(listing.id, session.clone());
 
-        let _ = self.db.record_join(&crate::store::servers::JoinHistoryEntry {
-            server_id: Some(listing.id),
-            server_name: listing.name.clone(),
-            instance_id: None,
-            mode: Some(mode),
-            joined_at: Utc::now(),
-            outcome: "success".to_string(),
-            detail: Some(format!("local bridge {}", session.local_address)),
-        });
+        let _ = self
+            .db
+            .record_join(&crate::store::servers::JoinHistoryEntry {
+                server_id: Some(listing.id),
+                server_name: listing.name.clone(),
+                instance_id: None,
+                mode: Some(mode),
+                joined_at: Utc::now(),
+                outcome: "success".to_string(),
+                detail: Some(format!("local bridge {}", session.local_address)),
+            });
 
-        if mode == ConnectionMode::Relay {
-            let _ = sink
-                .report(
-                    ProgressEvent::started(JobKind::P2pConnect, "Connected via relay")
-                        .stage(JobStage::Running)
-                        .detail("a direct connection was not possible"),
-                )
-                .await;
-        }
+        sink.report(
+            ProgressEvent::started(
+                JobKind::P2pConnect,
+                format!("Connected to {}", listing.name),
+            )
+            .stage(JobStage::Running)
+            .detail(if mode == ConnectionMode::Relay {
+                "connected via relay"
+            } else {
+                "connected via direct tunnel"
+            }),
+        )
+        .await;
 
         Ok(session)
     }
@@ -754,11 +837,17 @@ impl SessionManager {
     }
 
     pub fn active_hosts(&self) -> Vec<Arc<HostSession>> {
-        self.hosts.iter().map(|entry| entry.value().clone()).collect()
+        self.hosts
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect()
     }
 
     pub fn active_guests(&self) -> Vec<Arc<GuestSession>> {
-        self.guests.iter().map(|entry| entry.value().clone()).collect()
+        self.guests
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect()
     }
 
     /// Measure latency to a host without joining (server browser ping badge).
@@ -817,7 +906,10 @@ fn connection_for_host(
     }
 }
 
-fn configured_relay(options: &HostOptions, session_token: &str) -> Option<crate::models::server::RelayDescriptor> {
+fn configured_relay(
+    options: &HostOptions,
+    session_token: &str,
+) -> Option<crate::models::server::RelayDescriptor> {
     let url = options.relay_url.as_deref()?.trim();
     if url.is_empty() {
         return None;
@@ -870,6 +962,72 @@ fn is_lan_ipv4(ip: std::net::Ipv4Addr) -> bool {
 pub enum JoinTarget {
     ListingId { id: Uuid },
     Code { code: String },
+}
+
+/// Answer guest offers and probe their candidates from the punch socket.
+///
+/// `send_to` shares the socket with the demux reader's `recv_from`. Offers that
+/// arrived before this loop started sit in the directory inbox, so a pub/sub
+/// race cannot drop the first candidate exchange.
+async fn run_host_inbox(
+    socket: Arc<tokio::net::UdpSocket>,
+    session: Arc<HostSession>,
+    session_token: String,
+    cancel: CancellationToken,
+) {
+    let probe = encode_punch(
+        PunchKind::Probe,
+        &holepunch::token_fingerprint(&session_token),
+    );
+    loop {
+        if cancel.is_cancelled() {
+            break;
+        }
+        let envelopes = match session.directory.drain_signals(&session.peer_id).await {
+            Ok(envelopes) => envelopes,
+            Err(_) => {
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                continue;
+            }
+        };
+        for envelope in envelopes {
+            let SignalingEnvelope::Offer {
+                from_peer_id,
+                session_id,
+                candidates,
+                ..
+            } = envelope
+            else {
+                continue;
+            };
+            if session_id != session.id {
+                continue;
+            }
+            for _ in 0..5 {
+                for candidate in &candidates {
+                    let _ = socket.send_to(&probe, candidate.addr).await;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+            }
+            let endpoints = session.listing.read().connection.endpoints.clone();
+            let _ = session
+                .directory
+                .publish_signal(
+                    &from_peer_id,
+                    &SignalingEnvelope::Answer {
+                        from_peer_id: session.peer_id.clone(),
+                        to_peer_id: from_peer_id.clone(),
+                        session_id: session.id,
+                        candidates: endpoints,
+                        public_key: String::new(),
+                        signature: String::new(),
+                        sent_at: Utc::now(),
+                    },
+                )
+                .await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
 }
 
 /// The host's single reader of the punch socket.
@@ -953,8 +1111,16 @@ async fn run_host_demux(
                     let _ = socket.send_to(&bye.encode(), from).await;
                     continue;
                 }
-                match promote_guest(&socket, &session, &options, &session_token, from, &events, frame_tx.clone())
-                    .await
+                match promote_guest(
+                    &socket,
+                    &session,
+                    &options,
+                    &session_token,
+                    from,
+                    &events,
+                    frame_tx.clone(),
+                )
+                .await
                 {
                     Some(sender) => {
                         guests.insert(from, sender);
@@ -1164,8 +1330,10 @@ async fn run_guest_tunnel(
 ) -> AppResult<()> {
     use tokio::sync::mpsc::UnboundedSender;
 
-    let (inbound_tx, inbound_rx): (UnboundedSender<Vec<u8>>, _) = tokio::sync::mpsc::unbounded_channel();
-    let (outbound_tx, mut outbound_rx): (UnboundedSender<Vec<u8>>, _) = tokio::sync::mpsc::unbounded_channel();
+    let (inbound_tx, inbound_rx): (UnboundedSender<Vec<u8>>, _) =
+        tokio::sync::mpsc::unbounded_channel();
+    let (outbound_tx, mut outbound_rx): (UnboundedSender<Vec<u8>>, _) =
+        tokio::sync::mpsc::unbounded_channel();
     let (ack_tx, mut ack_rx): (UnboundedSender<u32>, _) = tokio::sync::mpsc::unbounded_channel();
 
     // Router: demux frames -> inbound data / writer ACKs / pong / teardown.
@@ -1306,7 +1474,10 @@ mod tests {
             options.relay_url.as_deref(),
             Some(crate::config::DEFAULT_RELAY_URL)
         );
-        assert_eq!(options.loader.kind, crate::models::instance::LoaderKind::Vanilla);
+        assert_eq!(
+            options.loader.kind,
+            crate::models::instance::LoaderKind::Vanilla
+        );
     }
 
     #[test]
@@ -1394,7 +1565,9 @@ mod tests {
 
         let hidden = host_endpoints(bound, false);
         assert!(hidden.iter().any(|endpoint| endpoint.addr == loopback));
-        assert!(hidden.iter().all(|endpoint| !endpoint.addr.ip().is_unspecified()));
+        assert!(hidden
+            .iter()
+            .all(|endpoint| !endpoint.addr.ip().is_unspecified()));
         for ip in &interfaces {
             if is_lan_ipv4(*ip) && !ip.is_loopback() {
                 assert!(
@@ -1406,7 +1579,9 @@ mod tests {
 
         let exposed = host_endpoints(bound, true);
         assert!(exposed.iter().any(|endpoint| endpoint.addr == loopback));
-        assert!(exposed.iter().all(|endpoint| !endpoint.addr.ip().is_unspecified()));
+        assert!(exposed
+            .iter()
+            .all(|endpoint| !endpoint.addr.ip().is_unspecified()));
         for ip in &interfaces {
             assert!(
                 exposed
@@ -1464,10 +1639,7 @@ mod tests {
             },
         )
         .await;
-        assert!(
-            punched.is_ok(),
-            "punch to {target} failed: {punched:?}"
-        );
+        assert!(punched.is_ok(), "punch to {target} failed: {punched:?}");
         host_task.await.expect("host task");
     }
 
@@ -1506,11 +1678,7 @@ mod tests {
             .expect("resolve")
             .expect("private share code is stored");
         assert_eq!(resolved.id, host.id);
-        assert!(directory
-            .listing(host.id)
-            .await
-            .expect("listing")
-            .is_some());
+        assert!(directory.listing(host.id).await.expect("listing").is_some());
         let browse = directory
             .browse(&ServerFilter::default())
             .await
@@ -1561,6 +1729,57 @@ mod tests {
             "stopping the host deletes the share code"
         );
         assert!(directory.listing(host.id).await.expect("listing").is_none());
+    }
+
+    #[tokio::test]
+    async fn sloppy_share_code_joins_a_loopback_host() {
+        use crate::models::progress::NoopProgressSink;
+        use crate::network::directory::MemoryDirectory;
+        use crate::network::relay::RelayTransport;
+        use crate::network::transport::{DirectTransport, TransportRegistry};
+        use crate::store::Database;
+
+        let directory = std::sync::Arc::new(MemoryDirectory::new());
+        let transports = std::sync::Arc::new(TransportRegistry::new(
+            std::sync::Arc::new(DirectTransport::new("127.0.0.1:0".parse().unwrap())),
+            std::sync::Arc::new(RelayTransport::new(None)),
+        ));
+        let manager = SessionManager::new(
+            directory,
+            transports,
+            Database::open_in_memory().expect("db"),
+            PunchConfig {
+                timeout: std::time::Duration::from_secs(2),
+                probe_interval: std::time::Duration::from_millis(40),
+                stun_servers: Vec::new(),
+                stun_timeout: std::time::Duration::from_millis(50),
+            },
+            String::new(),
+        );
+        let mut options = HostOptions::default();
+        options.public = false;
+        options.force_relay = false;
+        options.relay_url = None;
+        options.name = "Loopback".into();
+        let host = manager
+            .host_world(options, std::sync::Arc::new(NoopProgressSink))
+            .await
+            .expect("host");
+        assert!(host.share_code.starts_with("SXM1-"));
+
+        let sloppy = host.share_code.to_lowercase().replace('-', "");
+        let guest = manager
+            .join_world(
+                JoinTarget::Code { code: sloppy },
+                std::sync::Arc::new(NoopProgressSink),
+            )
+            .await
+            .expect("join");
+        assert_eq!(guest.id, host.id);
+        assert_eq!(guest.mode, ConnectionMode::DirectP2p);
+        assert!(guest.local_address.port() > 0);
+        guest.cancel.cancel();
+        host.stop().await.expect("stop");
     }
 
     #[test]

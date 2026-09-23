@@ -65,12 +65,13 @@ pub struct PunchConfig {
 /// the startup path, and a second lookup would only repeat the same answer.
 const DEFAULT_STUN_HOSTS: [&str; 2] = ["stun.l.google.com:19302", "stun.cloudflare.com:3478"];
 
-static DEFAULT_STUN_SERVERS: std::sync::LazyLock<Vec<SocketAddr>> = std::sync::LazyLock::new(|| {
-    DEFAULT_STUN_HOSTS
-        .iter()
-        .filter_map(|host| resolve_blocking(host))
-        .collect()
-});
+static DEFAULT_STUN_SERVERS: std::sync::LazyLock<Vec<SocketAddr>> =
+    std::sync::LazyLock::new(|| {
+        DEFAULT_STUN_HOSTS
+            .iter()
+            .filter_map(|host| resolve_blocking(host))
+            .collect()
+    });
 
 impl Default for PunchConfig {
     fn default() -> Self {
@@ -166,15 +167,18 @@ pub struct StunClient;
 
 impl StunClient {
     /// Send a Binding Request and parse the XOR-MAPPED-ADDRESS.
-    pub async fn discover(socket: &UdpSocket, server: SocketAddr, timeout: Duration) -> AppResult<SocketAddr> {
+    pub async fn discover(
+        socket: &UdpSocket,
+        server: SocketAddr,
+        timeout: Duration,
+    ) -> AppResult<SocketAddr> {
         let transaction_id = random_transaction_id();
         let request = encode_binding_request(&transaction_id);
 
         let started = Instant::now();
-        socket
-            .send_to(&request, server)
-            .await
-            .map_err(|err| AppError::Transport(format!("cannot reach STUN server {server}: {err}")))?;
+        socket.send_to(&request, server).await.map_err(|err| {
+            AppError::Transport(format!("cannot reach STUN server {server}: {err}"))
+        })?;
 
         let mut buffer = [0u8; 512];
         let deadline = Instant::now() + timeout;
@@ -398,6 +402,22 @@ pub async fn punch_with_config(
     session_token: &str,
     config: &PunchConfig,
 ) -> AppResult<PunchedChannel> {
+    let peers = std::sync::Arc::new(parking_lot::Mutex::new(vec![peer]));
+    punch_candidates(socket, &peers, session_token, config).await
+}
+
+/// Punch every candidate in `peers` until one answers.
+///
+/// The list may grow while the punch is in flight (a signaling answer arrived).
+/// A datagram is accepted from whichever address actually replied, as long as
+/// it carries this session's token: NAT often rewrites the source port, so
+/// requiring `from == peer` drops a punch that otherwise succeeded.
+pub async fn punch_candidates(
+    socket: &UdpSocket,
+    peers: &std::sync::Arc<parking_lot::Mutex<Vec<SocketAddr>>>,
+    session_token: &str,
+    config: &PunchConfig,
+) -> AppResult<PunchedChannel> {
     let token = token_fingerprint(session_token);
     let probe = encode_punch(PunchKind::Probe, &token);
     let ack = encode_punch(PunchKind::Ack, &token);
@@ -409,21 +429,42 @@ pub async fn punch_with_config(
 
     loop {
         if Instant::now() >= deadline {
+            let targets = peers.lock().clone();
+            let described = if targets.len() == 1 {
+                targets[0].to_string()
+            } else {
+                format!("{} candidates", targets.len())
+            };
             return Err(AppError::Transport(format!(
-                "no answer from {peer} after {attempts} hole-punch probes"
+                "JOIN_UNREACHABLE: no answer from {described} after {attempts} hole-punch probes"
             )));
         }
 
+        let targets = peers.lock().clone();
         attempts += 1;
-        socket
-            .send_to(&probe, peer)
-            .await
-            .map_err(|err| AppError::Transport(format!("cannot send punch probe: {err}")))?;
+        let mut sent = false;
+        let mut send_error: Option<std::io::Error> = None;
+        for peer in &targets {
+            match socket.send_to(&probe, *peer).await {
+                Ok(_) => sent = true,
+                // One dead LAN candidate must not abort the loopback or public ones.
+                Err(err) => send_error = Some(err),
+            }
+        }
+        if !targets.is_empty() && !sent {
+            let err = send_error
+                .map(|err| err.to_string())
+                .unwrap_or_else(|| "send failed".into());
+            return Err(AppError::Transport(format!(
+                "cannot send punch probe: {err}"
+            )));
+        }
 
         // Wait for either a PROBE (simultaneous open) or an ACK (we were first).
-        let received = tokio::time::timeout(config.probe_interval, socket.recv_from(&mut buffer)).await;
+        let received =
+            tokio::time::timeout(config.probe_interval, socket.recv_from(&mut buffer)).await;
         match received {
-            Ok(Ok((read, from))) if from == peer => {
+            Ok(Ok((read, from))) => {
                 let Some((kind, peer_token)) = decode_punch(&buffer[..read]) else {
                     continue;
                 };
@@ -431,24 +472,15 @@ pub async fn punch_with_config(
                     // Someone else is probing the same port: not our session.
                     continue;
                 }
-                match kind {
-                    PunchKind::Probe => {
-                        // Simultaneous open succeeded: confirm so the peer stops.
-                        let _ = socket.send_to(&ack, peer).await;
-                        return Ok(PunchedChannel {
-                            peer,
-                            rtt_ms: started.elapsed().as_millis() as u32,
-                            attempts,
-                        });
-                    }
-                    PunchKind::Ack => {
-                        return Ok(PunchedChannel {
-                            peer,
-                            rtt_ms: started.elapsed().as_millis() as u32,
-                            attempts,
-                        });
-                    }
+                if kind == PunchKind::Probe {
+                    // Simultaneous open succeeded: confirm so the peer stops.
+                    let _ = socket.send_to(&ack, from).await;
                 }
+                return Ok(PunchedChannel {
+                    peer: from,
+                    rtt_ms: started.elapsed().as_millis() as u32,
+                    attempts,
+                });
             }
             // Jitter our own probes a little so two peers do not stay in
             // lockstep. The RNG must be dropped before the await: `ThreadRng` is
@@ -492,8 +524,14 @@ mod tests {
         let id = [7u8; 12];
         let request = encode_binding_request(&id);
         assert_eq!(request.len(), 20);
-        assert_eq!(u16::from_be_bytes([request[0], request[1]]), STUN_BINDING_REQUEST);
-        assert_eq!(u32::from_be_bytes([request[4], request[5], request[6], request[7]]), STUN_MAGIC_COOKIE);
+        assert_eq!(
+            u16::from_be_bytes([request[0], request[1]]),
+            STUN_BINDING_REQUEST
+        );
+        assert_eq!(
+            u32::from_be_bytes([request[4], request[5], request[6], request[7]]),
+            STUN_MAGIC_COOKIE
+        );
         assert_eq!(&request[8..20], &id);
     }
 
@@ -599,7 +637,10 @@ mod tests {
         assert_eq!(decode_punch(&probe), Some((PunchKind::Probe, token)));
 
         let ack = encode_punch(PunchKind::Ack, &token);
-        assert_eq!(decode_punch(&ack).map(|(kind, _)| kind), Some(PunchKind::Ack));
+        assert_eq!(
+            decode_punch(&ack).map(|(kind, _)| kind),
+            Some(PunchKind::Ack)
+        );
 
         assert!(decode_punch(b"not a punch").is_none());
         assert!(decode_punch(&[]).is_none());
@@ -653,9 +694,15 @@ mod tests {
         )
         .await;
 
-        assert!(client_result.is_ok(), "client punch failed: {client_result:?}");
+        assert!(
+            client_result.is_ok(),
+            "client punch failed: {client_result:?}"
+        );
         let server_result = server_task.await.expect("join");
-        assert!(server_result.is_ok(), "server punch failed: {server_result:?}");
+        assert!(
+            server_result.is_ok(),
+            "server punch failed: {server_result:?}"
+        );
     }
 
     #[tokio::test]

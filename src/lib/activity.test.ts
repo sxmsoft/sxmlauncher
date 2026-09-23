@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { activityPresentation, selectStatusJob } from "./activity";
+import { activityPresentation, coalesceActivityJobs, selectStatusJob } from "./activity";
 import type { ProgressEvent } from "@/types/modpack";
 
 function job(partial: Partial<ProgressEvent> & Pick<ProgressEvent, "label" | "stage" | "kind">): ProgressEvent {
@@ -177,6 +177,45 @@ describe("activityPresentation", () => {
     expect(view.mode).toBe("steady");
     expect(view.status).toBe("Completed download");
     expect(view.showProgress).toBe(false);
+  });
+
+  it("drops a leftover host download once a newer hosting snapshot exists", () => {
+    const download = job({
+      jobId: "jar",
+      kind: "p2p_host",
+      stage: "downloading",
+      label: "Starting integrated host on :25565",
+      completedUnits: 1,
+      totalUnits: 1,
+    });
+    const live = job({
+      jobId: "host",
+      kind: "p2p_host",
+      stage: "running",
+      label: "Hosting Survival",
+      detail: "Waiting for players",
+    });
+    // Newest first, the way the jobs store keeps them.
+    const visible = coalesceActivityJobs([live, download]);
+    expect(visible.map((entry) => entry.jobId)).toEqual(["host"]);
+    expect(selectStatusJob([live, download])?.jobId).toBe("host");
+    expect(activityPresentation(selectStatusJob([live, download])!).status).toBe("Waiting for players");
+    expect(activityPresentation(selectStatusJob([live, download])!).showProgress).toBe(false);
+  });
+
+  it("keeps a real server-jar download while it is the newest host job", () => {
+    const download = job({
+      jobId: "jar",
+      kind: "p2p_host",
+      stage: "downloading",
+      label: "Minecraft server jar",
+      completedUnits: 10,
+      totalUnits: 40,
+      bytesPerSecond: 1000,
+    });
+    expect(selectStatusJob([download])?.jobId).toBe("jar");
+    expect(activityPresentation(download).status).toBe("Downloading");
+    expect(activityPresentation(download).showProgress).toBe(true);
   });
 
   it("still shows a download that has not finished", () => {

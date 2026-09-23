@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { Link2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/input";
 import { useJoinCode } from "@/hooks/queries";
+import { translateInviteMessage } from "@/lib/invite-errors";
 import { formatShareCode, isCompleteShareCode } from "@/services";
 
 /**
@@ -30,8 +32,12 @@ export function JoinCodeDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  const { t } = useTranslation();
   const [raw, setRaw] = useState("");
   const join = useJoinCode();
+  const failure = join.error
+    ? translateInviteMessage(join.error instanceof Error ? join.error.message : String(join.error), t)
+    : null;
 
   const formatted = formatShareCode(raw);
   const code = raw.trim() === "" ? "" : formatted;
@@ -50,11 +56,8 @@ export function JoinCodeDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="w-[min(94vw,40rem)]">
         <DialogHeader>
-          <DialogTitle>Join with a code</DialogTitle>
-          <DialogDescription>
-            Paste the code the host shared. The launcher opens a local bridge, so the game
-            itself connects to 127.0.0.1.
-          </DialogDescription>
+          <DialogTitle>{t("invite.title")}</DialogTitle>
+          <DialogDescription>{t("invite.description")}</DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-3">
@@ -74,20 +77,19 @@ export function JoinCodeDialog({
           />
           <div className="flex items-center gap-2">
             <Badge variant={complete ? "success" : "outline"}>
-              {complete ? "ready to join" : "keep typing…"}
+              {complete ? t("invite.ready") : t("invite.typing")}
             </Badge>
-            <span className="text-muted-foreground text-[11px]">
-              Codes are not secret — they only point at the host's session.
-            </span>
+            <span className="text-muted-foreground text-[11px]">{t("invite.hint")}</span>
           </div>
+          {failure ? <p className="text-[var(--destructive)] text-xs leading-relaxed">{failure}</p> : null}
         </div>
 
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            Cancel
+            {t("invite.cancel")}
           </Button>
           <Button disabled={!complete} loading={join.isPending} onClick={submit}>
-            <Link2 /> Join
+            <Link2 /> {t("invite.submit")}
           </Button>
         </DialogFooter>
       </DialogContent>

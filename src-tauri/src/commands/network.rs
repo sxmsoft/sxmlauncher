@@ -3,14 +3,12 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tauri::{Emitter, Manager, State};
+use tauri::{Emitter, State};
 use uuid::Uuid;
 
 use crate::commands::{parse_uuid, GuestStatus, HostStatus, JoinStatus, NetworkStatus};
 use crate::error::{AppError, AppResult};
-use crate::models::server::{
-    JoinRejection, ServerFilter, ServerListingSummary, WhitelistPolicy,
-};
+use crate::models::server::{JoinRejection, ServerFilter, ServerListingSummary, WhitelistPolicy};
 use crate::network::session::JoinTarget;
 use crate::network::{bridge, code::ConnectCode, holepunch, CodeFlags, HostOptions};
 use crate::state::{sink_for, AppState, SESSION_EVENT};
@@ -98,12 +96,20 @@ pub async fn server_set_favorite(
     Ok(())
 }
 
-/// What the header pill / Settings show as the directory endpoint.
+/// What the header pill shows as the directory endpoint.
+///
+/// Redis passwords are stripped. A shared Redis URL wins over the MQTT broker,
+/// matching [`crate::state::AppState::connect_directory`].
 fn directory_label(settings: &crate::config::AppSettings) -> String {
-    if settings.mqtt_broker.trim().is_empty() {
-        settings.redis_url.clone()
+    let shared = crate::network::directory::redis_endpoint_is_shared(&settings.redis_url);
+    if shared || settings.mqtt_broker.trim().is_empty() {
+        crate::network::directory::redact_redis_url(&settings.redis_url)
     } else {
-        format!("mqtt://{}/{}", settings.mqtt_broker.trim(), settings.mqtt_port)
+        format!(
+            "mqtt://{}:{}",
+            settings.mqtt_broker.trim(),
+            settings.mqtt_port
+        )
     }
 }
 
@@ -350,10 +356,7 @@ pub async fn host_start(
     // 1. Ensure the instance is installed and a local Minecraft server is up.
     let mut instance = state.instances().get(instance_id).await?;
     if instance.status != crate::models::instance::InstanceStatus::Ready {
-        instance = state
-            .instances()
-            .install(instance, sink.clone())
-            .await?;
+        instance = state.instances().install(instance, sink.clone()).await?;
     }
     let version = state.resolve_local_version(&instance.config.resolved_version_id())?;
     let java = state
@@ -517,10 +520,15 @@ pub async fn join_code(
     state: State<'_, AppState>,
 ) -> AppResult<JoinStatus> {
     // Validate locally first so a typo fails instantly with a clear message.
-    let _ = ConnectCode::parse(&code)?;
-    let manager = state.network()?;
+    let canonical = crate::network::code::normalize_share_code(&code);
+    if ConnectCode::parse(&canonical).is_err() {
+        return Err(AppError::Transport(
+            "INVITE_MALFORMED: that connection code is incomplete or corrupted".to_string(),
+        ));
+    }
+    let manager = state.ensure_directory().await?;
     let session = manager
-        .join_world(JoinTarget::Code { code }, sink_for(&app))
+        .join_world(JoinTarget::Code { code: canonical }, sink_for(&app))
         .await?;
     Ok(join_status(&session))
 }
@@ -532,7 +540,7 @@ pub async fn join_server(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> AppResult<JoinStatus> {
-    let manager = state.network()?;
+    let manager = state.ensure_directory().await?;
     let session = manager
         .join_world(JoinTarget::ListingId { id }, sink_for(&app))
         .await?;
@@ -558,9 +566,9 @@ pub async fn connection_code(id: Uuid, state: State<'_, AppState>) -> AppResult<
 /// Local round trip to a bridge address (diagnostics pane).
 #[tauri::command]
 pub async fn local_rtt(address: String) -> AppResult<u32> {
-    let parsed = address.parse().map_err(|err| {
-        AppError::Config(format!("`{address}` is not a valid address: {err}"))
-    })?;
+    let parsed = address
+        .parse()
+        .map_err(|err| AppError::Config(format!("`{address}` is not a valid address: {err}")))?;
     bridge::measure_tcp_rtt(parsed).await
 }
 
@@ -594,7 +602,8 @@ pub async fn nat_probe(state: State<'_, AppState>) -> AppResult<NatAdvice> {
     let socket = holepunch::bind_punch_socket(0).await?;
     let config = holepunch::PunchConfig::from_servers(&settings.stun_servers);
 
-    match holepunch::StunClient::classify(&socket, &config.stun_servers, config.stun_timeout).await {
+    match holepunch::StunClient::classify(&socket, &config.stun_servers, config.stun_timeout).await
+    {
         Ok(mapping) => Ok(NatAdvice {
             behavior: mapping.behavior,
             public_address: Some(mapping.address.to_string()),

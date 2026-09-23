@@ -140,31 +140,34 @@ impl AppState {
 
     /// (Re)connect the global directory with the current settings.
     ///
-    /// The embedded MQTT directory is the default: it needs no server of ours
-    /// (retained messages on a public broker carry the listings), which is how
-    /// the launcher is online out of the box. A non-empty `mqtt_broker` picks
-    /// it; an empty one falls back to the legacy Redis URL for self-hosters.
+    /// A non-local `redis_url` (shared Upstash, or any host that is not
+    /// loopback) is the directory both launchers share. The public MQTT broker
+    /// is only used when Redis is still the localhost default, so a Windows
+    /// install that used to point at `127.0.0.1` does not silently split from
+    /// a friend who pasted the shared URL.
     pub async fn connect_directory(
         &self,
         settings: &AppSettings,
     ) -> AppResult<Arc<SessionManager>> {
-        let directory: Arc<dyn crate::network::Directory> =
-            if !settings.mqtt_broker.trim().is_empty() {
-                Arc::new(
-                    crate::network::mqtt::MqttDirectory::connect(
-                        settings.mqtt_broker.trim(),
-                        settings.mqtt_port,
-                    )
-                    .await?,
+        let use_redis = crate::network::directory::redis_endpoint_is_shared(&settings.redis_url)
+            || settings.mqtt_broker.trim().is_empty();
+        let directory: Arc<dyn crate::network::Directory> = if use_redis {
+            Arc::new(crate::network::RedisDirectory::connect(&settings.redis_url).await?)
+        } else {
+            Arc::new(
+                crate::network::mqtt::MqttDirectory::connect(
+                    settings.mqtt_broker.trim(),
+                    settings.mqtt_port,
                 )
-            } else {
-                Arc::new(crate::network::RedisDirectory::connect(&settings.redis_url).await?)
-            };
+                .await?,
+            )
+        };
         let punch = PunchConfig::from_servers(&settings.stun_servers);
+        let bind: std::net::SocketAddr = "0.0.0.0:0"
+            .parse()
+            .map_err(|err| AppError::Config(format!("invalid bind address: {err}")))?;
         let transports = Arc::new(TransportRegistry::new(
-            Arc::new(DirectTransport::new("0.0.0.0:0".parse().map_err(
-                |err| AppError::Config(format!("invalid bind address: {err}")),
-            )?)),
+            Arc::new(DirectTransport::new(bind).with_signaling(directory.clone(), punch.clone())),
             Arc::new(RelayTransport::new(settings.relay_url.clone())),
         ));
 
@@ -181,31 +184,28 @@ impl AppState {
         Ok(manager)
     }
 
-    /// Session manager for hosting/joining. Falls back to an in-process
-    /// directory when Redis/MQTT is unavailable so join codes still work.
+    /// Session manager for hosting and joining.
+    ///
+    /// Reconnects when startup could not reach the directory. An in-process
+    /// directory is not a substitute: the other launcher would never see the code.
     pub async fn network_for_hosting(&self) -> AppResult<Arc<SessionManager>> {
+        self.ensure_directory().await
+    }
+
+    /// The connected directory, or one fresh attempt.
+    pub async fn ensure_directory(&self) -> AppResult<Arc<SessionManager>> {
         if let Some(manager) = self.network_optional() {
             return Ok(manager);
         }
         let settings = self.settings();
-        let directory: Arc<dyn crate::network::Directory> =
-            Arc::new(crate::network::MemoryDirectory::new());
-        let punch = PunchConfig::from_servers(&settings.stun_servers);
-        let transports = Arc::new(TransportRegistry::new(
-            Arc::new(DirectTransport::new("0.0.0.0:0".parse().map_err(
-                |err| AppError::Config(format!("invalid bind address: {err}")),
-            )?)),
-            Arc::new(RelayTransport::new(settings.relay_url.clone())),
-        ));
-        let manager = Arc::new(SessionManager::new(
-            directory,
-            transports,
-            self.db.clone(),
-            punch,
-            String::new(),
-        ));
-        *self.network.write() = Some(manager.clone());
-        Ok(manager)
+        if !settings.directory_enabled {
+            return Err(AppError::Directory(
+                "DIRECTORY_UNREACHABLE: the server directory is turned off in Settings. \
+                 Turn it on and set the same Redis URL on both launchers."
+                    .to_string(),
+            ));
+        }
+        self.connect_directory(&settings).await
     }
 
     /// The session manager, or a clear error when the directory is unreachable.
@@ -215,9 +215,8 @@ impl AppState {
     pub fn network(&self) -> AppResult<Arc<SessionManager>> {
         self.network.read().clone().ok_or_else(|| {
             AppError::Directory(
-                "the global server directory is not connected. Enable it in \
-                 Settings → Network, or use Host on an instance — join codes \
-                 work without Redis."
+                "DIRECTORY_UNREACHABLE: the global server directory is not connected. \
+                 Enable it in Settings → Network and use the same Redis URL on both launchers."
                     .to_string(),
             )
         })

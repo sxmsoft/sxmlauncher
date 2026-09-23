@@ -113,6 +113,25 @@
     "players": "Oyuncular",
     "directory": "Dizin"
   },
+  "invite": {
+    "title": "Kodla katıl",
+    "description": "Sunucunun paylaştığı kodu yapıştır. Başlatıcı yerel bir köprü açar; oyun 127.0.0.1 adresine bağlanır.",
+    "ready": "katılmaya hazır",
+    "typing": "yazmaya devam et…",
+    "hint": "Kodlar gizli değildir — yalnızca sunucunun oturumunu gösterir. Dünya açıkken geçerli kalırlar.",
+    "cancel": "Vazgeç",
+    "submit": "Katıl",
+    "failedTitle": "Bu kodla katılınamadı",
+    "hostFailed": "Sunucu başlatılamadı",
+    "errors": {
+      "INVITE_EXPIRED": "Bu davet süresi doldu ya da sunucu çevrimdışı. Yeni bir kod iste — dünya açıkken kod geçerli kalır.",
+      "INVITE_LISTING_GONE": "Sunucunun kaydı süresi doldu. Kodu yeniden kopyalamasını iste; dünya açıkken yenilenir.",
+      "INVITE_MALFORMED": "Kod eksik ya da bozuk. Sunucudaki kodun tamamını yapıştır.",
+      "DIRECTORY_UNREACHABLE": "Dizine ulaşılamıyor. Ayarlar → Ağ bölümünü kontrol et ve iki başlatıcıda da aynı Redis adresini kullan.",
+      "STUN_UNREACHABLE": "STUN sunucularına ulaşılamıyor. Barındırma sürer; doğrudan yol yoksa röle kullanılır.",
+      "JOIN_UNREACHABLE": "Sunucuya doğrudan ya da röle üzerinden ulaşılamadı. Hâlâ açık olduklarından emin ol ve yeniden dene."
+    }
+  },
   "profile": {
     "title": "Profil",
     "subtitle": "Skin, hesap ve pelerin.",
@@ -232,7 +251,8 @@
       "done": "Bitti",
       "completedDownload": "İndirme tamamlandı",
       "failed": "Başarısız",
-      "starting": "Başlatılıyor…"
+      "starting": "Başlatılıyor…",
+      "reconnecting": "Yeniden bağlanıyor"
     }
   },
   "strip": {

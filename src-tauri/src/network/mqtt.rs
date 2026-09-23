@@ -26,14 +26,14 @@
 //! * **Online counter** is derived from the cached listings (sum of reported
 //!   players) instead of a racy shared counter — it is a badge, not a ledger.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use parking_lot::{RwLock};
+use parking_lot::RwLock;
 use rumqttc::tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS, Transport};
 use tokio::sync::{broadcast, mpsc};
@@ -43,6 +43,8 @@ use crate::models::server::{
     ServerFilter, ServerHeartbeat, ServerListing, ServerListingSummary, SignalingEnvelope,
     DEFAULT_HEARTBEAT_TTL_SECS,
 };
+use crate::network::code::normalize_share_code;
+use crate::network::directory::InviteLookup;
 
 /// Topic namespace. Bumped from the Redis-era `sxml` so stale broker state is
 /// ignored cleanly.
@@ -109,6 +111,9 @@ pub struct MqttDirectory {
     events: broadcast::Sender<BrokerMessage>,
     broker: String,
     signal_subscribers: Arc<RwLock<HashMap<String, Vec<mpsc::Sender<SignalingEnvelope>>>>>,
+    /// Envelopes received from the broker, including ones that arrived before
+    /// a peer started polling. Capped so a quiet peer cannot grow forever.
+    inbox: Arc<RwLock<HashMap<String, VecDeque<SignalingEnvelope>>>>,
     cache: Arc<RwLock<MqttCache>>,
     /// Running value for `add_players` (the trait's counter contract); the
     /// displayed global number is derived from listings instead.
@@ -141,6 +146,8 @@ impl MqttDirectory {
 
         let cache: Arc<RwLock<MqttCache>> = Arc::new(RwLock::new(MqttCache::default()));
         let signal_subscribers: Arc<RwLock<HashMap<String, Vec<mpsc::Sender<SignalingEnvelope>>>>> =
+            Arc::new(RwLock::new(HashMap::new()));
+        let inbox: Arc<RwLock<HashMap<String, VecDeque<SignalingEnvelope>>>> =
             Arc::new(RwLock::new(HashMap::new()));
         let broker_label = format!("{broker_host}:{port}");
         // Clones for the spawned tasks (the originals move into `Self`).
@@ -209,16 +216,13 @@ impl MqttDirectory {
                                             loop_cache.write().listings.remove(&id);
                                         }
                                     } else {
-                                        eprintln!(
-                                            "[mqtt] bad listing payload on {suffix}"
-                                        );
+                                        eprintln!("[mqtt] bad listing payload on {suffix}");
                                     }
                                 }
                             }
                         } else if suffix.starts_with("code/") {
-                            let code = suffix["code/".len()..].to_uppercase();
-                            if publish.payload.is_empty() || publish.payload.as_ref() == TOMBSTONE
-                            {
+                            let code = normalize_share_code(&suffix["code/".len()..]);
+                            if publish.payload.is_empty() || publish.payload.as_ref() == TOMBSTONE {
                                 loop_cache.write().codes.remove(&code);
                             } else if let Ok(id) =
                                 serde_json::from_slice::<uuid::Uuid>(&publish.payload)
@@ -258,6 +262,7 @@ impl MqttDirectory {
         // the in-process receivers registered by `subscribe_signals`.
         let mut fanout_rx = events_tx.subscribe();
         let fanout_signals = signal_subscribers.clone();
+        let fanout_inbox = inbox.clone();
         tokio::spawn(async move {
             loop {
                 let Ok(message) = fanout_rx.recv().await else {
@@ -271,6 +276,14 @@ impl MqttDirectory {
                     continue;
                 };
                 let peer_id = message.suffix["signal/".len()..].to_string();
+                {
+                    let mut guard = fanout_inbox.write();
+                    let queue = guard.entry(peer_id.clone()).or_default();
+                    queue.push_back(envelope.clone());
+                    while queue.len() > 32 {
+                        queue.pop_front();
+                    }
+                }
                 if let Some(senders) = fanout_signals.write().get_mut(&peer_id) {
                     senders.retain(|sender| !sender.is_closed());
                     for sender in senders.iter() {
@@ -297,6 +310,7 @@ impl MqttDirectory {
             events: events_tx,
             broker: broker_label,
             signal_subscribers,
+            inbox,
             cache,
             local_players: Arc::new(AtomicI64::new(0)),
         })
@@ -357,7 +371,12 @@ impl MqttDirectory {
 
     async fn publish_retained(&self, suffix: String, payload: Vec<u8>) -> AppResult<()> {
         self.client
-            .publish(format!("{MQTT_KEY_PREFIX}/{suffix}"), QoS::AtLeastOnce, true, payload)
+            .publish(
+                format!("{MQTT_KEY_PREFIX}/{suffix}"),
+                QoS::AtLeastOnce,
+                true,
+                payload,
+            )
             .await
             .map_err(|err| AppError::Directory(format!("broker publish failed: {err}")))
     }
@@ -438,7 +457,9 @@ impl super::Directory for MqttDirectory {
             .await;
         // 2. Empty payload: deletes the retained message broker-side so
         // future subscribers start clean.
-        let _ = self.publish_retained(format!("listing/{id}"), Vec::new()).await;
+        let _ = self
+            .publish_retained(format!("listing/{id}"), Vec::new())
+            .await;
         Ok(())
     }
 
@@ -475,6 +496,14 @@ impl super::Directory for MqttDirectory {
         Ok(())
     }
 
+    async fn drain_signals(&self, peer_id: &str) -> AppResult<Vec<SignalingEnvelope>> {
+        let mut guard = self.inbox.write();
+        Ok(guard
+            .remove(peer_id)
+            .map(|queue| queue.into_iter().collect())
+            .unwrap_or_default())
+    }
+
     async fn publish_signal(&self, peer_id: &str, envelope: &SignalingEnvelope) -> AppResult<()> {
         let payload = serde_json::to_vec(envelope)
             .map_err(|err| AppError::Directory(format!("signal encode failed: {err}")))?;
@@ -490,19 +519,17 @@ impl super::Directory for MqttDirectory {
     }
 
     async fn put_code(&self, code: &str, server_id: uuid::Uuid) -> AppResult<()> {
-        self.cache
-            .write()
-            .codes
-            .insert(code.to_uppercase(), server_id);
+        let code = normalize_share_code(code);
+        self.cache.write().codes.insert(code.clone(), server_id);
         self.publish_retained(
-            format!("code/{}", code.to_uppercase()),
+            format!("code/{code}"),
             serde_json::to_vec(&server_id).unwrap_or_default(),
         )
         .await
     }
 
     async fn delete_code(&self, code: &str) -> AppResult<()> {
-        let code = code.to_uppercase();
+        let code = normalize_share_code(code);
         self.cache.write().codes.remove(&code);
         let suffix = format!("code/{code}");
         let _ = self
@@ -512,38 +539,44 @@ impl super::Directory for MqttDirectory {
         Ok(())
     }
 
-    async fn resolve_code(&self, code: &str) -> AppResult<Option<ServerListing>> {
-        let lookup = |cache: &MqttCache| {
-            cache
-                .codes
-                .get(&code.to_uppercase())
-                .copied()
-                .and_then(|id| cache.listings.get(&id).cloned())
+    async fn lookup_invite(&self, code: &str) -> AppResult<InviteLookup> {
+        let code = normalize_share_code(code);
+        let classify = |cache: &MqttCache| -> InviteLookup {
+            match cache.codes.get(&code).copied() {
+                Some(id) => match cache.listings.get(&id).cloned() {
+                    Some(listing) => InviteLookup::Found(listing),
+                    None => InviteLookup::ListingMissing { server_id: id },
+                },
+                None => InviteLookup::Unknown,
+            }
         };
-        if let Some(listing) = lookup(&self.cache.read()) {
-            return Ok(Some(listing));
+        let first = classify(&self.cache.read());
+        if !matches!(first, InviteLookup::Unknown) {
+            return Ok(first);
         }
         // The code may predate our subscription (typed right after launch).
         let deadline = tokio::time::Instant::now() + COLD_START_WAIT;
         loop {
             tokio::time::sleep(COLD_START_TICK).await;
-            if let Some(listing) = lookup(&self.cache.read()) {
-                return Ok(Some(listing));
-            }
-            if tokio::time::Instant::now() >= deadline {
-                return Ok(None);
+            let next = classify(&self.cache.read());
+            if !matches!(next, InviteLookup::Unknown) || tokio::time::Instant::now() >= deadline {
+                return Ok(next);
             }
         }
+    }
+
+    async fn resolve_code(&self, code: &str) -> AppResult<Option<ServerListing>> {
+        Ok(match self.lookup_invite(code).await? {
+            InviteLookup::Found(listing) => Some(listing),
+            InviteLookup::Unknown | InviteLookup::ListingMissing { .. } => None,
+        })
     }
 
     async fn add_players(&self, delta: i64) -> AppResult<i64> {
         // Global counter is derived from listings (`online_players`); the
         // session manager still calls this, so keep a local running value to
         // stay trait-compatible.
-        Ok(self
-            .local_players
-            .fetch_add(delta, Ordering::Relaxed)
-            + delta)
+        Ok(self.local_players.fetch_add(delta, Ordering::Relaxed) + delta)
     }
 }
 
@@ -574,9 +607,8 @@ mod tests {
     #[test]
     fn is_fresh_rejects_old_heartbeats() {
         let mut listing = test_listing();
-        listing.heartbeat_at = Utc::now() - chrono::Duration::seconds(
-            3 * i64::from(DEFAULT_HEARTBEAT_TTL_SECS),
-        );
+        listing.heartbeat_at =
+            Utc::now() - chrono::Duration::seconds(3 * i64::from(DEFAULT_HEARTBEAT_TTL_SECS));
         assert!(!is_fresh(&listing));
         listing.heartbeat_at = Utc::now();
         assert!(is_fresh(&listing));
@@ -620,18 +652,23 @@ mod tests {
         assert_eq!(fetched.map(|l| l.name), Some(listing.name.clone()));
 
         // Removal: empty retained payload deletes it for future subscribers.
-        host_a.remove_listing(listing.id, "peer").await.expect("remove");
+        host_a
+            .remove_listing(listing.id, "peer")
+            .await
+            .expect("remove");
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         let after = host_b.listing(listing.id).await.expect("listing after");
-        assert!(after.is_none(), "removed listing must vanish from the cache");
+        assert!(
+            after.is_none(),
+            "removed listing must vanish from the cache"
+        );
     }
 
     fn test_listing() -> ServerListing {
         use crate::models::account::AccountProvider;
         use crate::models::instance::LoaderKind;
         use crate::models::server::{
-            ConnectionDescriptor, ConnectionMode, PlayerCount, ServerOwner,
-            SERVER_LISTING_SCHEMA,
+            ConnectionDescriptor, ConnectionMode, PlayerCount, ServerOwner, SERVER_LISTING_SCHEMA,
         };
         ServerListing {
             // NOTE: fields are re-listed here rather than `..Default::default()`

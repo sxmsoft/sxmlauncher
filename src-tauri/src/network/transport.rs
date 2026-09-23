@@ -29,8 +29,11 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::{AppError, AppResult};
 use crate::models::progress::{JobKind, JobStage, ProgressEvent, ProgressSink};
-use crate::models::server::{ConnectionDescriptor, ConnectionMode, EndpointKind, PeerEndpoint};
-use crate::network::holepunch::{PunchConfig, PunchedChannel};
+use crate::models::server::{
+    ConnectionDescriptor, ConnectionMode, EndpointKind, PeerEndpoint, SignalingEnvelope,
+};
+use crate::network::directory::Directory;
+use crate::network::holepunch::{self, PunchConfig, PunchedChannel};
 use crate::network::relay::RelayTransport;
 
 /// Maximum application payload per frame (keeps datagrams under the path MTU).
@@ -69,7 +72,8 @@ impl ByteCounters {
     }
 
     fn add_up(&self, bytes: usize) {
-        self.up.fetch_add(bytes as u64, std::sync::atomic::Ordering::Relaxed);
+        self.up
+            .fetch_add(bytes as u64, std::sync::atomic::Ordering::Relaxed);
     }
 
     fn add_down(&self, bytes: usize) {
@@ -246,7 +250,8 @@ impl TransportRegistry {
 
         Err(last_error.unwrap_or_else(|| {
             AppError::Transport(
-                "the host could not be reached directly and offers no relay".to_string(),
+                "JOIN_UNREACHABLE: the host could not be reached directly and offers no relay"
+                    .to_string(),
             )
         }))
     }
@@ -264,11 +269,25 @@ impl TransportRegistry {
 pub struct DirectTransport {
     /// Local address to bind tunnels on (usually `0.0.0.0:0`).
     bind: SocketAddr,
+    /// When set, the guest publishes its candidates and accepts answers while punching.
+    directory: Option<Arc<dyn Directory>>,
+    punch: PunchConfig,
 }
 
 impl DirectTransport {
     pub fn new(bind: SocketAddr) -> Self {
-        Self { bind }
+        Self {
+            bind,
+            directory: None,
+            punch: PunchConfig::default(),
+        }
+    }
+
+    /// Attach the shared directory so a join can exchange ICE-style candidates.
+    pub fn with_signaling(mut self, directory: Arc<dyn Directory>, punch: PunchConfig) -> Self {
+        self.directory = Some(directory);
+        self.punch = punch;
+        self
     }
 }
 
@@ -288,9 +307,9 @@ impl Transport for DirectTransport {
         sink: Arc<dyn ProgressSink>,
     ) -> AppResult<ConnectedPeer> {
         let candidates = ordered_endpoints(&descriptor.endpoints);
-        if candidates.is_empty() {
+        if candidates.is_empty() && self.directory.is_none() {
             return Err(AppError::Transport(
-                "the host did not publish any reachable address".to_string(),
+                "JOIN_UNREACHABLE: the host did not publish any reachable address".to_string(),
             ));
         }
 
@@ -301,53 +320,113 @@ impl Transport for DirectTransport {
             .await
             .map_err(|err| AppError::Transport(format!("cannot bind tunnel socket: {err}")))?;
 
-        let mut last_error = None;
-        for (endpoint, address) in candidates {
-            sink.report(
-                ProgressEvent::started(JobKind::P2pConnect, "Opening a direct tunnel")
-                    .stage(JobStage::ConnectingP2p)
-                    .detail(format!("{:?} {address}", endpoint.kind).to_lowercase()),
-            )
-            .await;
-
-            let punch_config = if endpoint.kind == EndpointKind::Local {
-                // Unreachable LAN addresses must not stall the relay fallback.
-                PunchConfig {
-                    timeout: Duration::from_millis(700),
-                    probe_interval: Duration::from_millis(50),
-                    stun_servers: Vec::new(),
-                    stun_timeout: Duration::from_millis(700),
-                }
-            } else {
-                PunchConfig::default()
-            };
-            match crate::network::holepunch::punch_with_config(
+        let peers = Arc::new(parking_lot::Mutex::new(
+            candidates
+                .iter()
+                .map(|(_, address)| *address)
+                .collect::<Vec<_>>(),
+        ));
+        let stop_signals = CancellationToken::new();
+        if let Some(directory) = &self.directory {
+            let guest_peer = uuid::Uuid::new_v4().to_string();
+            let mut offered = guest_endpoints(socket.local_addr().ok());
+            match holepunch::StunClient::classify(
                 &socket,
-                address,
-                &descriptor.session_token,
-                &punch_config,
+                &self.punch.stun_servers,
+                self.punch.stun_timeout,
             )
             .await
             {
-                Ok(punched) => {
-                    let (stream, rtt) =
-                        UdpTunnel::start(socket, punched, &descriptor.session_token).await?;
-                    return Ok(ConnectedPeer {
-                        peer_id: descriptor.peer_id.clone(),
-                        mode: ConnectionMode::DirectP2p,
-                        remote: Some(address),
-                        rtt_ms: rtt,
-                        stream: Box::new(stream),
-                        cancel: CancellationToken::new(),
-                    });
+                Ok(mapping) => offered.push(PeerEndpoint::public(mapping.address)),
+                Err(err) => {
+                    sink.report(
+                        ProgressEvent::started(JobKind::P2pConnect, "NAT discovery failed")
+                            .stage(JobStage::ConnectingP2p)
+                            .detail(format!("STUN_UNREACHABLE: {err}")),
+                    )
+                    .await;
                 }
-                Err(err) => last_error = Some(err),
             }
+            let session_id =
+                uuid::Uuid::parse_str(&descriptor.peer_id).unwrap_or_else(|_| uuid::Uuid::nil());
+            let _ = directory
+                .publish_signal(
+                    &descriptor.peer_id,
+                    &SignalingEnvelope::Offer {
+                        from_peer_id: guest_peer.clone(),
+                        to_peer_id: descriptor.peer_id.clone(),
+                        session_id,
+                        candidates: offered,
+                        public_key: descriptor.public_key.clone(),
+                        signature: String::new(),
+                        sent_at: chrono::Utc::now(),
+                    },
+                )
+                .await;
+            let directory = directory.clone();
+            let extra = peers.clone();
+            let stop = stop_signals.clone();
+            tokio::spawn(async move {
+                while !stop.is_cancelled() {
+                    if let Ok(envelopes) = directory.drain_signals(&guest_peer).await {
+                        for envelope in envelopes {
+                            if let SignalingEnvelope::Answer { candidates, .. } = envelope {
+                                let mut guard = extra.lock();
+                                for candidate in candidates {
+                                    if !guard.contains(&candidate.addr) {
+                                        guard.push(candidate.addr);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(150)).await;
+                }
+            });
         }
 
-        Err(last_error.unwrap_or_else(|| {
-            AppError::Transport("no candidate address accepted the hole punch".to_string())
-        }))
+        sink.report(
+            ProgressEvent::started(JobKind::P2pConnect, "Opening a direct tunnel")
+                .stage(JobStage::ConnectingP2p)
+                .detail(format!("{} candidates", peers.lock().len())),
+        )
+        .await;
+
+        let locals_only = candidates
+            .iter()
+            .all(|(endpoint, _)| endpoint.kind == EndpointKind::Local)
+            && !candidates.is_empty();
+        let punch_config = if locals_only {
+            // Unreachable LAN addresses must not stall the relay fallback.
+            PunchConfig {
+                timeout: Duration::from_millis(700),
+                probe_interval: Duration::from_millis(50),
+                stun_servers: Vec::new(),
+                stun_timeout: Duration::from_millis(200),
+            }
+        } else {
+            self.punch.clone()
+        };
+        let punched =
+            holepunch::punch_candidates(&socket, &peers, &descriptor.session_token, &punch_config)
+                .await;
+        stop_signals.cancel();
+        match punched {
+            Ok(punched) => {
+                let remote = punched.peer;
+                let (stream, rtt) =
+                    UdpTunnel::start(socket, punched, &descriptor.session_token).await?;
+                Ok(ConnectedPeer {
+                    peer_id: descriptor.peer_id.clone(),
+                    mode: ConnectionMode::DirectP2p,
+                    remote: Some(remote),
+                    rtt_ms: rtt,
+                    stream: Box::new(stream),
+                    cancel: CancellationToken::new(),
+                })
+            }
+            Err(err) => Err(err),
+        }
     }
 
     async fn probe(&self, descriptor: &ConnectionDescriptor) -> AppResult<Option<u32>> {
@@ -356,12 +435,8 @@ impl Transport for DirectTransport {
         };
         let socket = UdpSocket::bind(self.bind).await?;
         let started = Instant::now();
-        let punched = crate::network::holepunch::punch(
-            &socket,
-            address,
-            &descriptor.session_token,
-        )
-        .await?;
+        let punched =
+            crate::network::holepunch::punch(&socket, address, &descriptor.session_token).await?;
         let _ = punched;
         Ok(Some(started.elapsed().as_millis() as u32))
     }
@@ -387,12 +462,43 @@ fn direct_attempt(descriptor: &ConnectionDescriptor) -> Option<ConnectionDescrip
     }
 }
 
+/// Addresses the guest can be dialed on, derived from the punch socket.
+fn guest_endpoints(bound: Option<SocketAddr>) -> Vec<PeerEndpoint> {
+    let Some(bound) = bound else {
+        return Vec::new();
+    };
+    let port = bound.port();
+    if port == 0 {
+        return Vec::new();
+    }
+    let mut endpoints = vec![PeerEndpoint::local(SocketAddr::from((
+        std::net::Ipv4Addr::LOCALHOST,
+        port,
+    )))];
+    for ip in crate::network::localnet::ipv4_interface_addresses() {
+        if ip.is_unspecified() || ip.is_loopback() {
+            continue;
+        }
+        let addr = SocketAddr::from((ip, port));
+        if endpoints.iter().any(|endpoint| endpoint.addr == addr) {
+            continue;
+        }
+        endpoints.push(PeerEndpoint::local(addr));
+    }
+    endpoints
+}
+
 /// Endpoints sorted by preference, dropping expired ones.
 fn ordered_endpoints(endpoints: &[PeerEndpoint]) -> Vec<(PeerEndpoint, SocketAddr)> {
     let now = chrono::Utc::now();
     let mut candidates: Vec<(PeerEndpoint, SocketAddr)> = endpoints
         .iter()
-        .filter(|endpoint| endpoint.expires_at.map(|expiry| expiry > now).unwrap_or(true))
+        .filter(|endpoint| {
+            endpoint
+                .expires_at
+                .map(|expiry| expiry > now)
+                .unwrap_or(true)
+        })
         .map(|endpoint| (endpoint.clone(), endpoint.addr))
         .collect();
     candidates.sort_by_key(|(endpoint, _)| match endpoint.kind {
@@ -577,7 +683,8 @@ impl UdpTunnel {
             .await
             .map_err(|_| {
                 AppError::Transport(
-                    "the peer accepted the punch but never answered the tunnel handshake".to_string(),
+                    "the peer accepted the punch but never answered the tunnel handshake"
+                        .to_string(),
                 )
             })??;
 
@@ -913,7 +1020,10 @@ mod tests {
         assert_eq!(ordered[2].0.kind, EndpointKind::Relay);
     }
 
-    fn sample_descriptor(mode: ConnectionMode, endpoints: Vec<PeerEndpoint>) -> ConnectionDescriptor {
+    fn sample_descriptor(
+        mode: ConnectionMode,
+        endpoints: Vec<PeerEndpoint>,
+    ) -> ConnectionDescriptor {
         ConnectionDescriptor {
             mode,
             peer_id: "peer".into(),

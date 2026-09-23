@@ -128,7 +128,7 @@ async fn start_dedicated_server(
             JobKind::P2pHost,
             format!("Starting integrated host on :{port}"),
         )
-        .stage(JobStage::Downloading),
+        .stage(JobStage::Launching),
     )
     .await;
 

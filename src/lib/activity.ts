@@ -68,6 +68,7 @@ function isSteady(job: ProgressEvent, text: string): boolean {
 }
 
 function calmStatus(job: ProgressEvent, text: string): string {
+  if (/reconnecting/i.test(text)) return "Reconnecting";
   if (/listening|detected local/i.test(text)) return "Listening";
   if (/waiting for players/i.test(text)) return "Waiting for players";
   if (/\bpublished\b/i.test(text)) return "Session published";
@@ -120,8 +121,29 @@ export function activityPresentation(job: ProgressEvent): ActivityPresentation {
  * are not live work. A completed authlib-injector fetch must not keep the bar
  * on Downloading after the game is already up.
  */
+/**
+ * P2P emits a new job id per snapshot. Older unfinished rows (a server-jar
+ * download, "Starting integrated host") must not keep Activity on Downloading
+ * after a newer host or join snapshot exists.
+ *
+ * `jobs` is newest-first, matching the jobs store.
+ */
+export function coalesceActivityJobs(jobs: ProgressEvent[]): ProgressEvent[] {
+  const newestLive = new Map<string, string>();
+  for (const job of jobs) {
+    if (job.finished || job.error) continue;
+    if (job.kind !== "p2p_host" && job.kind !== "p2p_connect") continue;
+    if (!newestLive.has(job.kind)) newestLive.set(job.kind, job.jobId);
+  }
+  return jobs.filter((job) => {
+    if (job.finished || job.error) return true;
+    if (job.kind !== "p2p_host" && job.kind !== "p2p_connect") return true;
+    return newestLive.get(job.kind) === job.jobId;
+  });
+}
+
 export function selectStatusJob(jobs: ProgressEvent[]): ProgressEvent | null {
-  const live = jobs.filter((job) => !job.finished && !job.error);
+  const live = coalesceActivityJobs(jobs).filter((job) => !job.finished && !job.error);
   return (
     live.find((job) => activityPresentation(job).mode === "work") ??
     live.find((job) => activityPresentation(job).mode === "steady") ??
