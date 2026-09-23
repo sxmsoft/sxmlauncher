@@ -248,9 +248,28 @@ pub fn format_code(payload: &[u8]) -> String {
     formatted
 }
 
-/// RFC 4648 base32 without padding (Crockford-friendly: no `0`/`1` lookalikes
-/// in the alphabet we emit, which is why we use the standard A–Z2–7 set).
+/// RFC 4648 base32, no padding. Digits are only `2–7`.
+///
+/// `0`, `1`, `8`, and `9` are not in this alphabet. The join box uses the same
+/// set (`SHARE_CODE_PATTERN` in `src/services/network.ts`). The only `1` in a
+/// code is the `SXM1` prefix.
 const ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+/// `true` when `code` is exactly what the join box accepts:
+/// `SXM1` + eight groups of four + a final pair, alphabet `A–Z2–7`.
+pub fn matches_share_code_pattern(code: &str) -> bool {
+    let Some(rest) = code.strip_prefix("SXM1-") else {
+        return false;
+    };
+    let groups: Vec<&str> = rest.split('-').collect();
+    if groups.len() != 9 {
+        return false;
+    }
+    let group_ok = |group: &str, len: usize| {
+        group.len() == len && group.bytes().all(|byte| ALPHABET.contains(&byte))
+    };
+    groups[..8].iter().all(|group| group_ok(group, 4)) && group_ok(groups[8], 2)
+}
 
 fn base32_encode(data: &[u8]) -> String {
     let mut output = String::new();
@@ -466,6 +485,45 @@ mod tests {
         let payload: Vec<u8> = (0..PAYLOAD_LEN as u8).collect();
         let encoded = base32_encode(&payload);
         assert_eq!(base32_decode(&encoded).expect("decode"), payload);
+        assert!(
+            encoded.bytes().all(|byte| ALPHABET.contains(&byte)),
+            "encoder emitted a character outside A-Z2-7: {encoded}"
+        );
+    }
+
+    #[test]
+    fn generated_codes_match_the_join_box_pattern() {
+        let flags = CodeFlags {
+            password_protected: false,
+            whitelisted: false,
+        };
+        let mut samples = Vec::new();
+        for index in 0..256u32 {
+            let id = Uuid::from_u128(u128::from(index).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            samples.push(ConnectCode::relay(id, index as u16, flags).to_share_string());
+            let address: SocketAddr =
+                SocketAddr::from(([10, (index >> 8) as u8, index as u8, 7], 20000 + index as u16));
+            if let Ok(direct) = ConnectCode::direct(id, address, flags) {
+                samples.push(direct.to_share_string());
+            }
+        }
+        // Every 21-byte payload length is fixed, so one hostile buffer is enough
+        // to prove the encoder cannot invent a 0 or a 1.
+        samples.push(format_code(&[0x00, 0x11, 0x01, 0x10, 0x08, 0x09, 0xff].repeat(3)));
+
+        assert!(samples.len() > 500);
+        for code in samples {
+            assert!(
+                matches_share_code_pattern(&code),
+                "generated code is not a SHARE_CODE_PATTERN match: {code}"
+            );
+            let payload: String = code.chars().skip(4).filter(|ch| *ch != '-').collect();
+            assert_eq!(payload.len(), 34, "{code}");
+            assert!(
+                !payload.contains(['0', '1', '8', '9']),
+                "payload contains a digit the join box rejects: {code}"
+            );
+        }
     }
 
     #[test]

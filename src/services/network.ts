@@ -100,27 +100,51 @@ export type NetworkService = typeof networkService;
 const SHARE_CODE_PAYLOAD_CHARS = 34;
 
 /**
- * `SXM1-` plus eight groups of four and a final group of two.
- * Alphabet matches the Rust encoder (RFC 4648: `A–Z` and `2–7`).
+ * RFC 4648 base32, same set as `ALPHABET` in `src-tauri/src/network/code.rs`.
+ * Digits are only 2–7. `0`, `1`, `8`, and `9` are never emitted.
  */
-const SHARE_CODE_PATTERN =
+export const SHARE_CODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+/**
+ * `SXM1-` plus eight groups of four and a final group of two.
+ * Keep this in lockstep with `matches_share_code_pattern` on the Rust side.
+ */
+export const SHARE_CODE_PATTERN =
   /^SXM1(?:-[A-Z2-7]{4}){8}-[A-Z2-7]{2}$/;
 
 /**
- * Normalize a share code as the user types: groups of four, uppercase.
+ * Payload characters after a leading `SXM1` prefix.
  *
- * `1` is not in the payload alphabet, so `SXM1` can only be the prefix.
- * Strip every copy — pasting a full code into a field that already shows
- * the prefix must not consume the 34-character budget twice.
+ * Only a prefix is removed. A `1` later in the paste stays, so it can be
+ * reported as invalid instead of disappearing into another `SXM1` strip.
+ */
+function shareCodePayload(raw: string): string {
+  let cleaned = raw.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  while (cleaned.startsWith("SXM1")) cleaned = cleaned.slice(4);
+  return cleaned.slice(0, SHARE_CODE_PAYLOAD_CHARS);
+}
+
+/**
+ * Normalize a share code as the user types: groups of four, uppercase.
  */
 export function formatShareCode(raw: string): string {
-  const cleaned = raw.toUpperCase().replace(/[^A-Z0-9]/g, "");
-  const payload = cleaned.replaceAll("SXM1", "").slice(0, SHARE_CODE_PAYLOAD_CHARS);
+  const payload = shareCodePayload(raw);
   const groups = payload.match(/.{1,4}/g) ?? [];
   return ["SXM1", ...groups].join("-");
 }
 
+/** Characters in the payload that the encoder never emits (`0`, `1`, `8`, `9`, …). */
+export function invalidShareCodeChars(raw: string): string[] {
+  const seen: string[] = [];
+  for (const character of shareCodePayload(raw)) {
+    if (!SHARE_CODE_ALPHABET.includes(character) && !seen.includes(character)) {
+      seen.push(character);
+    }
+  }
+  return seen;
+}
+
 /** True when the code is a full 21-byte payload and can be submitted. */
 export function isCompleteShareCode(code: string): boolean {
-  return SHARE_CODE_PATTERN.test(formatShareCode(code));
+  return invalidShareCodeChars(code).length === 0 && SHARE_CODE_PATTERN.test(formatShareCode(code));
 }

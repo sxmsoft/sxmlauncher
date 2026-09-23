@@ -185,7 +185,7 @@ function HostingStatus({
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-black/30 px-3 py-2">
             <Radio className="text-muted-foreground size-4" />
-            <code className="text-sm tracking-[0.15em] tabular-nums">{status.shareCode}</code>
+            <code className="font-mono text-sm tracking-[0.12em]">{status.shareCode}</code>
           </div>
           <Button
             variant="outline"
@@ -204,7 +204,7 @@ function HostingStatus({
             {copied ? "Copied" : "Copy code"}
           </Button>
           <span className="text-muted-foreground text-[11px]">
-            Valid while this world is hosted. It drops a few minutes after you stop.
+            Valid while this world is hosted. Letters A–Z and digits 2–7 only — the only 1 is the SXM1 prefix.
           </span>
           {status.publicEndpoint ? (
             <Hint label="Public endpoint other peers dial (STUN discovery)">

@@ -118,6 +118,8 @@
     "description": "Sunucunun paylaştığı kodu yapıştır. Başlatıcı yerel bir köprü açar; oyun 127.0.0.1 adresine bağlanır.",
     "ready": "katılmaya hazır",
     "typing": "yazmaya devam et…",
+    "invalid": "geçersiz karakter",
+    "invalidChars": "“{{chars}}” paylaşım kodunda yok. Alfabe A–Z ve 2–7. Tek 1, SXM1 önekidir — sıfır için O harfini, bir için I harfini kullan.",
     "hint": "Kodlar gizli değildir — yalnızca sunucunun oturumunu gösterir. Dünya açıkken geçerli kalırlar.",
     "cancel": "Vazgeç",
     "submit": "Katıl",

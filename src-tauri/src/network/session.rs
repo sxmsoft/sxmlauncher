@@ -40,7 +40,7 @@ use crate::models::server::{
     DEFAULT_HEARTBEAT_TTL_SECS, HEARTBEAT_INTERVAL_SECS,
 };
 use crate::network::bridge::{self, DEFAULT_SERVER_PORT};
-use crate::network::code::{normalize_share_code, CodeFlags, ConnectCode};
+use crate::network::code::{matches_share_code_pattern, normalize_share_code, CodeFlags, ConnectCode};
 use crate::network::directory::{Directory, InviteLookup};
 use crate::network::holepunch::{
     self, decode_punch, encode_punch, NatBehavior, PunchConfig, PunchKind, PUNCH_DATAGRAM_LEN,
@@ -484,6 +484,11 @@ impl SessionManager {
             )
             .to_share_string(),
         };
+        if !matches_share_code_pattern(&share_code) {
+            return Err(AppError::Transport(format!(
+                "INVITE_MALFORMED: generated share code is outside the join alphabet (A–Z and 2–7): {share_code}"
+            )));
+        }
 
         // 5. Directory. Public sessions join the browse index. Private
         // sessions store the listing body only, but both store the code.

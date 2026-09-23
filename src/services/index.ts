@@ -16,6 +16,7 @@ export { modService, modRequest, type ModService } from "./mods";
 export {
   networkService,
   formatShareCode,
+  invalidShareCodeChars,
   isCompleteShareCode,
   type NetworkService,
 } from "./network";

@@ -118,6 +118,8 @@
     "description": "Paste the code the host shared. The launcher opens a local bridge, so the game itself connects to 127.0.0.1.",
     "ready": "ready to join",
     "typing": "keep typing…",
+    "invalid": "invalid character",
+    "invalidChars": "“{{chars}}” is not used in a share code. The alphabet is A–Z and 2–7. The only 1 is the SXM1 prefix — use the letter O for a zero and the letter I for a one.",
     "hint": "Codes are not secret — they only point at the host's session. They stay valid while that world is hosted.",
     "cancel": "Cancel",
     "submit": "Join",

@@ -16,7 +16,7 @@ import {
 import { Textarea } from "@/components/ui/input";
 import { useJoinCode } from "@/hooks/queries";
 import { translateInviteMessage } from "@/lib/invite-errors";
-import { formatShareCode, isCompleteShareCode } from "@/services";
+import { formatShareCode, invalidShareCodeChars, isCompleteShareCode } from "@/services";
 
 /**
  * Join with a share code.
@@ -41,7 +41,8 @@ export function JoinCodeDialog({
 
   const formatted = formatShareCode(raw);
   const code = raw.trim() === "" ? "" : formatted;
-  const complete = isCompleteShareCode(raw);
+  const invalidChars = invalidShareCodeChars(raw);
+  const complete = invalidChars.length === 0 && isCompleteShareCode(raw);
 
   const submit = () => {
     join.mutate(code, {
@@ -76,11 +77,20 @@ export function JoinCodeDialog({
             }}
           />
           <div className="flex items-center gap-2">
-            <Badge variant={complete ? "success" : "outline"}>
-              {complete ? t("invite.ready") : t("invite.typing")}
+            <Badge variant={complete ? "success" : invalidChars.length > 0 ? "destructive" : "outline"}>
+              {complete
+                ? t("invite.ready")
+                : invalidChars.length > 0
+                  ? t("invite.invalid")
+                  : t("invite.typing")}
             </Badge>
             <span className="text-muted-foreground text-[11px]">{t("invite.hint")}</span>
           </div>
+          {invalidChars.length > 0 ? (
+            <p className="text-[var(--destructive)] text-xs leading-relaxed">
+              {t("invite.invalidChars", { chars: invalidChars.join(" ") })}
+            </p>
+          ) : null}
           {failure ? <p className="text-[var(--destructive)] text-xs leading-relaxed">{failure}</p> : null}
         </div>
 

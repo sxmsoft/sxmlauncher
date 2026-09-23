@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatShareCode, isCompleteShareCode } from "./network";
+import { formatShareCode, invalidShareCodeChars, isCompleteShareCode, SHARE_CODE_ALPHABET, SHARE_CODE_PATTERN } from "./network";
 
 /** Host-style relay code: 34 base32 chars, the 21-byte ConnectCode payload. */
 const HOST_CODE = "SXM1-AEAI-RMQG-NTKC-WSQT-ELAX-3T6N-CYAB-FF6E-NQ";
@@ -43,5 +43,24 @@ describe("isCompleteShareCode", () => {
   it("rejects a payload that is one character short", () => {
     const compact = HOST_CODE.replace(/-/g, "");
     expect(isCompleteShareCode(compact.slice(0, -1))).toBe(false);
+  });
+
+  it("names 0 and 1 instead of treating a full paste as still typing", () => {
+    const dirty = HOST_CODE.replace("AEAI", "0E1I");
+    expect(isCompleteShareCode(dirty)).toBe(false);
+    expect(invalidShareCodeChars(dirty)).toEqual(["0", "1"]);
+    expect(formatShareCode(dirty)).toContain("0");
+    expect(formatShareCode(dirty)).toContain("1");
+  });
+
+  it("keeps every encoder alphabet character inside SHARE_CODE_PATTERN", () => {
+    expect(SHARE_CODE_ALPHABET).toBe("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567");
+    expect(SHARE_CODE_ALPHABET).not.toMatch(/[0189]/);
+    const payload = (SHARE_CODE_ALPHABET + SHARE_CODE_ALPHABET).slice(0, 34);
+    const code = formatShareCode(`SXM1${payload}`);
+    expect(SHARE_CODE_PATTERN.test(code)).toBe(true);
+    expect(invalidShareCodeChars(code)).toEqual([]);
+    expect(isCompleteShareCode(code)).toBe(true);
+    expect(isCompleteShareCode(HOST_CODE)).toBe(true);
   });
 });
