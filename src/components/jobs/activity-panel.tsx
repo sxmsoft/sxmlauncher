@@ -130,7 +130,13 @@ export function ActivityFeed({
                 <span className="text-muted-foreground min-w-0 flex-1 truncate text-[11px]">
                   {job.error && !job.error.includes("cancelled")
                     ? `${job.label} — ${job.error}`
-                    : `${job.label} · ${job.error ? t("activity.stopped") : t("activity.done")}`}
+                    : `${job.label} · ${
+                        job.error
+                          ? t("activity.stopped")
+                          : job.kind === "p2p_host" || job.kind === "p2p_connect"
+                            ? t("activity.done")
+                            : t("activity.status.completedDownload")
+                      }`}
                 </span>
                 <Button variant="ghost" size="icon-sm" onClick={() => dismiss(job.jobId)}>
                   <X className="size-3" />

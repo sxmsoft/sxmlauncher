@@ -163,6 +163,22 @@ describe("activityPresentation", () => {
     expect(selectStatusJob([download])).toBeNull();
   });
 
+  it("labels a finished download as completed, without a bar", () => {
+    const view = activityPresentation(
+      job({
+        kind: "launch",
+        stage: "done",
+        label: "authlib-injector (Ely.by agent)",
+        finished: true,
+        completedUnits: 1,
+        totalUnits: 1,
+      }),
+    );
+    expect(view.mode).toBe("steady");
+    expect(view.status).toBe("Completed download");
+    expect(view.showProgress).toBe(false);
+  });
+
   it("still shows a download that has not finished", () => {
     const download = job({
       jobId: "authlib",

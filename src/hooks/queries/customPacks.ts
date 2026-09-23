@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import i18n from "@/i18n";
 import { qk } from "@/lib/query-client";
 import { customPackService } from "@/services/customPacks";
 import { toast } from "@/stores/ui";
@@ -102,7 +103,7 @@ export function usePlayCustomPack() {
     onSuccess: (instance) => {
       void client.invalidateQueries({ queryKey: qk.instances });
       void client.invalidateQueries({ queryKey: qk.instance(instance.id) });
-      toast.success(`Pack installed as "${instance.name}"`, "Ready to launch");
+      toast.success(i18n.t("browse.toastPack", { name: instance.name }), i18n.t("browse.toastPackReady"));
     },
     onError: (error) => toast.error(error, "Pack install failed"),
   });

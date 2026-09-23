@@ -23,6 +23,7 @@ const STATUS_KEYS: Record<string, string> = {
   "Publishing session": "activity.status.registering",
   Running: "activity.status.running",
   Done: "activity.status.done",
+  "Completed download": "activity.status.completedDownload",
   Failed: "activity.status.failed",
   "Starting…": "activity.status.starting",
 };

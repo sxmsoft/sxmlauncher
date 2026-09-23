@@ -71,6 +71,9 @@ function calmStatus(job: ProgressEvent, text: string): string {
   if (/listening|detected local/i.test(text)) return "Listening";
   if (/waiting for players/i.test(text)) return "Waiting for players";
   if (/\bpublished\b/i.test(text)) return "Session published";
+  if (job.stage === "done" && job.kind !== "p2p_host" && job.kind !== "p2p_connect") {
+    return "Completed download";
+  }
   if (job.stage === "running" || /^hosting\b/i.test(job.label) || job.stage === "registering") {
     return "Service Running";
   }

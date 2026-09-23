@@ -13,7 +13,7 @@ import { JoinCodeDialog } from "@/components/servers/join-code-dialog";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { CardSkeleton, EmptyState, ErrorState } from "@/components/ui/feedback";
-import { useInstances, useSelectedInstance } from "@/hooks/queries";
+import { useActiveAccount, useInstances, useSelectedInstance } from "@/hooks/queries";
 
 /**
  * Home. The hero launches the selected instance. The library lives on its own
@@ -24,6 +24,7 @@ export function DashboardPage() {
   const navigate = useNavigate();
   const instances = useInstances();
   const selected = useSelectedInstance();
+  const account = useActiveAccount();
 
   const [createOpen, setCreateOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -33,7 +34,11 @@ export function DashboardPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title={t("home.title")}
-        description={t("home.subtitle")}
+        description={
+          account.data
+            ? t("home.signedIn", { user: account.data.username })
+            : t("home.signedOut")
+        }
         actions={
           <>
             <Button variant="outline" size="sm" className="rounded-full" onClick={() => setJoinOpen(true)}>

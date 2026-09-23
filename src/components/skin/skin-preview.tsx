@@ -1,5 +1,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 
+import { useTranslation } from "react-i18next";
+
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -116,6 +118,7 @@ export function SkinFigure({
  * an Ely.by UUID is not a Mojang profile, so that service draws Steve.
  */
 export function SkinPreview({ account, className }: { account: AccountSummary; className?: string }) {
+  const { t } = useTranslation();
   const refresh = useRefreshSkin();
   const refreshAccount = useRefreshAccount();
   const cape = publicTextureUrl(capeUrl(account));
@@ -225,7 +228,7 @@ export function SkinPreview({ account, className }: { account: AccountSummary; c
           {account.provider === "offline"
             ? "Offline profiles render the default skin. Sign in with Microsoft or Ely.by to use your own custom skin."
             : account.provider === "ely_by"
-              ? "Ely.by skins are attached to the JVM through the Authlib endpoint, so other Ely.by players see them in game. Changed your skin? Press “Reload skin”."
+              ? t("profile.authlibNote")
               : "Microsoft accounts use the official Mojang skin service — change your skin at minecraft.net and press “Reload skin” to fetch it here."}
         </p>
       </CardContent>

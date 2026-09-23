@@ -194,14 +194,11 @@ export function ModBrowser({
     }
     if (addPackTargetId) {
       addToPack.mutate({ source: hit.source, projectId: hit.id });
-      toast.success(`Added ${hit.title}`, `Pin more mods or play the pack from Custom Packs.`);
+      toast.success(t("browse.toastAdded", { title: hit.title }), t("browse.toastAddedBody"));
       return;
     }
     if (!targetId) {
-      toast.warning(
-        "No instance selected",
-        "Create an instance first, then install mods into it. Modpacks create an instance automatically.",
-      );
+      toast.warning(t("browse.toastNoInstance"), t("browse.toastNoInstanceBody"));
       return;
     }
     installMods.mutate([{ source: hit.source, projectId: hit.id }]);
@@ -236,7 +233,7 @@ export function ModBrowser({
             disabled={addToPack.isPending}
             onClick={() => {
               addToPack.mutate({ source: hit.source, projectId: hit.id });
-              toast.success(`Pinned ${hit.title}`, `Continue in Custom Packs.`);
+              toast.success(t("browse.toastAdded", { title: hit.title }), t("browse.toastAddedBody"));
             }}
           >
             <Plus className="size-3.5" />
@@ -268,7 +265,7 @@ export function ModBrowser({
           <Input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search mods and modpacks…"
+            placeholder={t("browse.searchPlaceholder")}
             className="pl-9"
           />
         </div>
@@ -351,11 +348,11 @@ export function ModBrowser({
         ) : hits.length === 0 ? (
           <EmptyState
             icon={<Package />}
-            title="Nothing found"
+            title={t("browse.emptyTitle")}
             description={
               debouncedQuery
-                ? `No projects matched “${debouncedQuery}” on ${source}.`
-                : "Type a project name, or browse the most popular results."
+                ? t("browse.emptyQuery", { q: debouncedQuery, source })
+                : t("browse.emptyHint")
             }
           />
         ) : (
@@ -434,16 +431,13 @@ export function ModBrowser({
               projectId: versionPick.id,
               versionId: version.id,
             });
-            toast.success(`Pinned ${versionPick.title}`, "Continue in Custom Packs.");
+            toast.success(t("browse.toastAdded", { title: versionPick.title }), t("browse.toastAddedBody"));
           } else if (hasInstances) {
             installMods.mutate([
               { source: versionPick.source, projectId: versionPick.id, versionId: version.id },
             ]);
           } else {
-            toast.warning(
-              "No instance selected",
-              "Create an instance first, then install mods into it. Modpacks create an instance automatically.",
-            );
+            toast.warning(t("browse.toastNoInstance"), t("browse.toastNoInstanceBody"));
           }
           setVersionPick(null);
         }}

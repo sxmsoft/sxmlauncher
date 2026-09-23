@@ -524,8 +524,7 @@ export function SkinPage() {
               })}
 
               <p className="text-muted-foreground mt-2 text-xs leading-relaxed">
-                Offline profiles always render the fallback avatar: without a signed-in
-                provider there is no skin texture to fetch.
+                {t("profile.offlineFallback")}
               </p>
             </CardContent>
           </Card>

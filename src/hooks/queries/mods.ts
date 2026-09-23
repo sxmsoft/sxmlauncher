@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import i18n from "@/i18n";
 import { qk } from "@/lib/query-client";
 import { modService } from "@/services";
 import { toast, useUiStore } from "@/stores/ui";
@@ -63,7 +64,7 @@ export function useInstallMods(instanceId: string | null) {
       void client.invalidateQueries({ queryKey: qk.instanceMods(instanceId ?? "none") });
       void client.invalidateQueries({ queryKey: qk.instances });
       toast.success(
-        `Installed ${plan.files.length} file${plan.files.length === 1 ? "" : "s"}`,
+        i18n.t("browse.toastInstalled", { n: plan.files.length }),
         `${(plan.totalBytes / 1_048_576).toFixed(1)} MiB · Java ${plan.javaMajor}`,
       );
     },
@@ -120,11 +121,7 @@ export function useInstallModpack() {
       });
       select(instance.id);
       void client.invalidateQueries({ queryKey: qk.instances });
-      const ready = instance.status === "ready" || instance.status === "running";
-      toast.success(
-        `Modpack installed as “${instance.name}”`,
-        ready ? "Ready to launch" : "Open Play and install the game files to launch",
-      );
+      toast.success(i18n.t("browse.toastPack", { name: instance.name }), i18n.t("browse.toastPackReady"));
     },
     onError: (error) => toast.error(error, "Modpack install failed"),
   });
