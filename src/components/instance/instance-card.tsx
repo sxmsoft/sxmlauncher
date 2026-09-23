@@ -50,13 +50,13 @@ export function InstanceCard({
         <img
           src={loaderBg(instance.loader.kind)}
           alt=""
-          className="absolute inset-0 size-full scale-110 object-cover blur-[6px]"
+          className="absolute inset-0 size-full scale-110 object-cover blur-[3px] brightness-125"
         />
-        <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-black/15 to-black/10" />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/45 via-black/10 to-transparent" />
         <img
           src={loaderIcon(instance.loader.kind, 64)}
           alt=""
-          className="absolute bottom-2.5 left-3.5 size-11 drop-shadow-[0_6px_12px_rgba(0,0,0,0.45)]"
+          className="absolute bottom-2 left-3 size-16 drop-shadow-[0_6px_12px_rgba(0,0,0,0.45)]"
         />
       </div>
       <div className="flex flex-1 flex-col gap-3 p-4">

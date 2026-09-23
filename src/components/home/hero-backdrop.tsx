@@ -14,11 +14,10 @@ export function HeroBackdrop({ loader }: { loader: string }) {
       <img
         src={loaderBg(loader)}
         alt=""
-        className="absolute inset-0 h-[118%] w-[118%] -translate-x-[6%] -translate-y-[4%] scale-105 object-cover blur-[12px]"
+        className="absolute inset-0 h-full w-full scale-105 object-cover blur-[8px] brightness-125"
       />
-      <div className="absolute inset-0 bg-white/[0.04] backdrop-blur-[2px]" />
-      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-black/25" />
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_18%,rgba(0,0,0,0.42)_100%)]" />
+      <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.07),transparent_32%)]" />
+      <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/15 to-black/10" />
     </div>
   );
 }
