@@ -2,7 +2,7 @@
 
 # Linux desktop QA passed. workflow_dispatch still requires the exact
 # LINUX-QA-PASSED gate. The Cursor GitHub App cannot send that dispatch
-# (actions:write is denied), so this branch also builds on push.
+# (actions:write is denied), so these branches also build on push.
 on:
   workflow_dispatch:
     inputs:
@@ -12,6 +12,7 @@ on:
   push:
     branches:
       - cursor/nebula-vault-ui-3cab
+      - cursor/misty-visual-redesign-f4d5
 
 jobs:
   build-windows:
@@ -55,7 +56,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist-artifacts | Out-Null
           Get-ChildItem src-tauri/target/release -Filter *.exe -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -match '^(sxmlauncher|SXMLauncher)\.exe$' } |
-            ForEach-Object { Copy-Item $_.FullName dist-artifacts/SXMLauncher.exe -Force }
+            ForEach-Object { Copy-Item $_.FullName dist-artifacts/SXMLAUNCHER.exe -Force }
           Get-ChildItem src-tauri/target/release/bundle -Recurse -Include *.msi,*setup.exe -ErrorAction SilentlyContinue |
             ForEach-Object { Copy-Item $_.FullName dist-artifacts/ -Force }
           Get-ChildItem dist-artifacts | Format-Table Name, Length
