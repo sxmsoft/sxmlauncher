@@ -39,7 +39,7 @@ fn disable_stock_webview_menu(window: &tauri::WebviewWindow) {
     #[cfg(windows)]
     {
         let _ = window.with_webview(|platform| unsafe {
-            let Ok(core) = platform.controller.CoreWebView2() else {
+            let Ok(core) = platform.controller().CoreWebView2() else {
                 return;
             };
             let Ok(settings) = core.Settings() else {
