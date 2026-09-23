@@ -840,6 +840,8 @@ export function mockResponse(command: string, args?: Record<string, unknown>): u
         localPort: 51120,
         remote: "203.0.113.42:51109",
         rttMs: 34,
+        launched: false,
+        launchError: null,
       };
     case "connection_code":
       return "SXM1-AEAI-RMQG-NTKC-WSQT-ELAX-3T6N-CYAB-FF6E-NQ";

@@ -68,6 +68,7 @@ function isSteady(job: ProgressEvent, text: string): boolean {
 }
 
 function calmStatus(job: ProgressEvent, text: string): string {
+  if (/minecraft server ready|\bdone \(/i.test(text)) return "Service Running";
   if (/reconnecting/i.test(text)) return "Reconnecting";
   if (/listening|detected local/i.test(text)) return "Listening";
   if (/waiting for players/i.test(text)) return "Waiting for players";

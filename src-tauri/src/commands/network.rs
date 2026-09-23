@@ -516,6 +516,7 @@ pub async fn host_kick(
 #[tauri::command]
 pub async fn join_code(
     code: String,
+    instance_id: Option<Uuid>,
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> AppResult<JoinStatus> {
@@ -530,13 +531,14 @@ pub async fn join_code(
     let session = manager
         .join_world(JoinTarget::Code { code: canonical }, sink_for(&app))
         .await?;
-    Ok(join_status(&session))
+    Ok(finish_join(&app, &state, &session, instance_id).await)
 }
 
 /// Join from the server browser.
 #[tauri::command]
 pub async fn join_server(
     id: Uuid,
+    instance_id: Option<Uuid>,
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> AppResult<JoinStatus> {
@@ -544,7 +546,7 @@ pub async fn join_server(
     let session = manager
         .join_world(JoinTarget::ListingId { id }, sink_for(&app))
         .await?;
-    Ok(join_status(&session))
+    Ok(finish_join(&app, &state, &session, instance_id).await)
 }
 
 /// Leave a joined session.
@@ -654,7 +656,11 @@ fn status_of(session: &Arc<crate::network::HostSession>) -> AppResult<HostStatus
 }
 
 /// Build the UI-facing status for a guest session.
-fn join_status(session: &Arc<crate::network::GuestSession>) -> JoinStatus {
+fn join_status(
+    session: &Arc<crate::network::GuestSession>,
+    launched: bool,
+    launch_error: Option<String>,
+) -> JoinStatus {
     let (ip, port) = session.connect_target();
     JoinStatus {
         id: session.id,
@@ -664,7 +670,79 @@ fn join_status(session: &Arc<crate::network::GuestSession>) -> JoinStatus {
         local_port: port,
         remote: session.remote.map(|address| address.to_string()),
         rtt_ms: session.rtt_ms,
+        launched,
+        launch_error,
     }
+}
+
+/// Open the bridge, then start the matching instance straight into it.
+async fn finish_join(
+    app: &tauri::AppHandle,
+    state: &State<'_, AppState>,
+    session: &Arc<crate::network::GuestSession>,
+    requested: Option<Uuid>,
+) -> JoinStatus {
+    let (launched, launch_error) = launch_joined_client(app, state, session, requested).await;
+    join_status(session, launched, launch_error)
+}
+
+async fn launch_joined_client(
+    app: &tauri::AppHandle,
+    state: &State<'_, AppState>,
+    session: &Arc<crate::network::GuestSession>,
+    requested: Option<Uuid>,
+) -> (bool, Option<String>) {
+    let instance_id = match requested {
+        Some(id) => Some(id),
+        None => match state.instances().list().await {
+            Ok(list) => pick_ready_instance(&list, &session.game_version),
+            Err(err) => return (false, Some(err.to_string())),
+        },
+    };
+    let Some(instance_id) = instance_id else {
+        return (
+            false,
+            Some(
+                "JOIN_NO_INSTANCE: select a ready instance, then join again so Minecraft connects"
+                    .to_string(),
+            ),
+        );
+    };
+    match crate::commands::instance::instance_launch(
+        instance_id,
+        Some(crate::commands::instance::LaunchOptions {
+            connect: Some(session.local_address.to_string()),
+            ..Default::default()
+        }),
+        app.clone(),
+        state.clone(),
+    )
+    .await
+    {
+        Ok(_) => (true, None),
+        Err(err) => (false, Some(err.to_string())),
+    }
+}
+
+/// Prefer a ready instance on the hosted game version, then the one played most recently.
+fn pick_ready_instance(
+    instances: &[crate::models::instance::Instance],
+    game_version: &str,
+) -> Option<Uuid> {
+    let mut ready: Vec<&crate::models::instance::Instance> = instances
+        .iter()
+        .filter(|instance| instance.status == crate::models::instance::InstanceStatus::Ready)
+        .collect();
+    ready.sort_by(|left, right| {
+        let rank = |instance: &&crate::models::instance::Instance| {
+            (
+                instance.config.game_version == game_version,
+                instance.last_played_at,
+            )
+        };
+        rank(right).cmp(&rank(left))
+    });
+    ready.first().map(|instance| instance.config.id)
 }
 
 /// Re-exported for the frontend: flags carried by a share code.

@@ -180,11 +180,14 @@ export interface JoinStatus {
   id: string;
   serverName: string;
   mode: ConnectionMode;
-  /** Address to pass to the game as `--server` / `--port`. */
+  /** Loopback bridge. 1.20+ uses quick play; older versions use `--server` / `--port`. */
   localAddress: string;
   localPort: number;
   remote: string | null;
   rttMs: number | null;
+  /** A ready instance was started into the bridge. */
+  launched: boolean;
+  launchError: string | null;
 }
 
 export interface NetworkStatus {

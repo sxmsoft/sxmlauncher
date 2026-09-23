@@ -31,11 +31,14 @@ use crate::state::AppState;
 
 /// Build and run the desktop application.
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+    // `SXMLAUNCHER_ALLOW_MULTI` is for a second process on one machine. The
+    // P2P check itself is cross-machine: one desktop hosts, the other joins.
+    if !crate::config::allow_multi_instance() {
         // Must be registered first. On Windows and Linux the Microsoft
         // `ms-xal-` redirect starts a second process; this hands the URL to
         // the instance that is waiting for it.
-        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             for arg in argv {
                 crate::auth::deliver_oauth_callback(&arg);
             }
@@ -44,7 +47,9 @@ pub fn run() {
                 let _ = window.show();
                 let _ = window.set_focus();
             }
-        }))
+        }));
+    }
+    builder
         .plugin(tauri_plugin_deep_link::init())
         // Plugins the UI calls directly (file pickers, opening folders, ...).
         .plugin(tauri_plugin_dialog::init())

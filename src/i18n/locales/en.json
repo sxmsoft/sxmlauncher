@@ -123,13 +123,16 @@
     "submit": "Join",
     "failedTitle": "Could not join with that code",
     "hostFailed": "Could not start hosting",
+    "launched": "Minecraft is joining {{name}}",
+    "launchFailed": "The tunnel is open, but the game did not start",
     "errors": {
       "INVITE_EXPIRED": "This invite expired or the host is offline. Ask them to copy a fresh code — it stays valid while they are hosting.",
       "INVITE_LISTING_GONE": "The host's listing expired. Ask them to copy the code again; it refreshes while the world is open.",
       "INVITE_MALFORMED": "That code is incomplete or corrupted. Paste the full code from the host.",
       "DIRECTORY_UNREACHABLE": "The directory is unreachable. Check Settings → Network and use the same Redis URL on both launchers.",
       "STUN_UNREACHABLE": "STUN servers are unreachable. Hosting continues and will use the relay when a direct path is not possible.",
-      "JOIN_UNREACHABLE": "Could not reach the host directly or through the relay. Check that they are still hosting and try again."
+      "JOIN_UNREACHABLE": "Could not reach the host directly or through the relay. Check that they are still hosting and try again.",
+      "JOIN_NO_INSTANCE": "The tunnel is open. Install or select a ready instance, then join again so Minecraft connects."
     }
   },
   "profile": {

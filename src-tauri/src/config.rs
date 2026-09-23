@@ -98,11 +98,19 @@ pub struct AppPaths {
 
 impl AppPaths {
     /// Derive every path from the OS app-data directory Tauri resolves.
+    ///
+    /// A named profile (`SXMLAUNCHER_PROFILE`, or a name passed as
+    /// `SXMLAUNCHER_ALLOW_MULTI`) lands under `profiles/<name>` so a second
+    /// process does not share this one's database.
     pub fn resolve(app: &AppHandle) -> AppResult<Self> {
-        let root = app
+        let mut root = app
             .path()
             .app_data_dir()
             .map_err(|err| AppError::Config(format!("cannot resolve app data dir: {err}")))?;
+        if let Some(profile) = data_profile_name() {
+            root.push("profiles");
+            root.push(profile);
+        }
         Ok(Self::from_root(root))
     }
 
@@ -540,9 +548,91 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> AppResult<()> {
     Ok(())
 }
 
+/// Skip the single-instance lock when `SXMLAUNCHER_ALLOW_MULTI` is set.
+///
+/// `0`, `false`, `no`, and `off` keep the lock. Any other non-empty value
+/// allows a second process. This is a power-user switch, not the P2P test plan.
+pub fn allow_multi_instance() -> bool {
+    std::env::var("SXMLAUNCHER_ALLOW_MULTI")
+        .ok()
+        .is_some_and(|value| multi_flag_enabled(Some(value.as_str())))
+}
+
+pub fn multi_flag_enabled(raw: Option<&str>) -> bool {
+    match raw.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => !matches!(
+            value.to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        ),
+        None => false,
+    }
+}
+
+/// Profile folder for a second process.
+///
+/// `SXMLAUNCHER_PROFILE` wins. A non-boolean `SXMLAUNCHER_ALLOW_MULTI` value
+/// (`joiner`, `host`) is used when the profile variable is unset.
+pub fn data_profile_name() -> Option<String> {
+    profile_dirname(
+        std::env::var("SXMLAUNCHER_ALLOW_MULTI").ok().as_deref(),
+        std::env::var("SXMLAUNCHER_PROFILE").ok().as_deref(),
+    )
+}
+
+pub fn profile_dirname(allow_multi: Option<&str>, profile: Option<&str>) -> Option<String> {
+    if let Some(name) = profile.map(str::trim).filter(|value| !value.is_empty()) {
+        return sanitize_profile(name);
+    }
+    let raw = allow_multi.map(str::trim).unwrap_or("");
+    if raw.is_empty()
+        || matches!(
+            raw.to_ascii_lowercase().as_str(),
+            "0" | "1" | "true" | "false" | "yes" | "no" | "on" | "off"
+        )
+    {
+        return None;
+    }
+    sanitize_profile(raw)
+}
+
+fn sanitize_profile(raw: &str) -> Option<String> {
+    let mut out = String::new();
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            out.push(ch.to_ascii_lowercase());
+        }
+    }
+    let out = out.trim_matches(['-', '_']).to_string();
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn multi_instance_flag_and_profile_name() {
+        assert!(!multi_flag_enabled(None));
+        assert!(!multi_flag_enabled(Some("")));
+        assert!(!multi_flag_enabled(Some("false")));
+        assert!(!multi_flag_enabled(Some("0")));
+        assert!(multi_flag_enabled(Some("1")));
+        assert!(multi_flag_enabled(Some("joiner")));
+        assert_eq!(profile_dirname(Some("1"), None), None);
+        assert_eq!(
+            profile_dirname(Some("1"), Some("Guest Box")).as_deref(),
+            Some("guestbox")
+        );
+        assert_eq!(
+            profile_dirname(Some("Joiner"), None).as_deref(),
+            Some("joiner")
+        );
+        assert_eq!(profile_dirname(Some("../"), None), None);
+    }
 
     #[test]
     fn layout_is_derived_from_root() {

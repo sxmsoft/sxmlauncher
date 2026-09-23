@@ -49,9 +49,11 @@ export const networkService = {
     call<boolean>("host_kick", { id, peerId, reason: reason ?? null }),
 
   /** Join by typing a share code — validated locally first. */
-  joinCode: (code: string) => call<JoinStatus>("join_code", { code }),
+  joinCode: (code: string, instanceId?: string | null) =>
+    call<JoinStatus>("join_code", { code, instanceId: instanceId ?? null }),
 
-  joinServer: (id: string) => call<JoinStatus>("join_server", { id }),
+  joinServer: (id: string, instanceId?: string | null) =>
+    call<JoinStatus>("join_server", { id, instanceId: instanceId ?? null }),
 
   leave: (id: string) => call<void>("leave_session", { id }),
 

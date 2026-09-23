@@ -224,6 +224,8 @@ pub struct GuestSession {
     pub mode: ConnectionMode,
     /// Loopback address the game client must connect to.
     pub local_address: SocketAddr,
+    /// Game version from the listing, so the joiner can launch a matching instance.
+    pub game_version: String,
     pub remote: Option<SocketAddr>,
     pub rtt_ms: Option<u32>,
     pub handshake: Arc<parking_lot::Mutex<Option<bridge::HandshakeInfo>>>,
@@ -779,6 +781,7 @@ impl SessionManager {
             server_name: listing.name.clone(),
             mode,
             local_address: handle.local_address,
+            game_version: listing.game_version.clone(),
             remote: peer.remote,
             rtt_ms: peer.rtt_ms,
             handshake,

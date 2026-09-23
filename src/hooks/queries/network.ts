@@ -1,14 +1,15 @@
 /** Server browser, hosting and joining. */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 
 import { translateInviteMessage } from "@/lib/invite-errors";
 import { qk } from "@/lib/query-client";
 import { networkService } from "@/services";
 import { useSessionsStore } from "@/stores/sessions";
-import { toast } from "@/stores/ui";
-import type { HostRequest, JoinRejection, ServerFilter } from "@/types/server";
+import { toast, useUiStore } from "@/stores/ui";
+import type { HostRequest, JoinRejection, JoinStatus, ServerFilter } from "@/types/server";
 
 export function useServerBrowse(filter: ServerFilter) {
   return useQuery({
@@ -130,17 +131,32 @@ export function useKickGuest() {
   });
 }
 
+function announceJoin(status: JoinStatus, t: TFunction) {
+  const bridge = `${status.localAddress}:${status.localPort}`;
+  if (status.launched) {
+    toast.success(t("invite.launched", { name: status.serverName }), bridge);
+    return;
+  }
+  if (status.launchError) {
+    toast.warning(translateInviteMessage(status.launchError, t), t("invite.launchFailed"));
+    return;
+  }
+  toast.success(`Connected to ${status.serverName}`, `Bridge on ${bridge}`);
+}
+
 /** Join by share code (validated locally before the network round trip). */
 export function useJoinCode() {
   const client = useQueryClient();
   const setGuest = useSessionsStore((state) => state.setGuest);
+  const instanceId = useUiStore((state) => state.selectedInstanceId);
   const { t } = useTranslation();
   return useMutation({
-    mutationFn: (code: string) => networkService.joinCode(code),
+    mutationFn: (code: string) => networkService.joinCode(code, instanceId),
     onSuccess: (status) => {
       setGuest(status);
       void client.invalidateQueries({ queryKey: qk.networkStatus });
-      toast.success(`Connected to ${status.serverName}`, `Bridge on ${status.localAddress}:${status.localPort}`);
+      void client.invalidateQueries({ queryKey: qk.running });
+      announceJoin(status, t);
     },
     onError: (error) =>
       toast.error(
@@ -153,13 +169,15 @@ export function useJoinCode() {
 export function useJoinServer() {
   const client = useQueryClient();
   const setGuest = useSessionsStore((state) => state.setGuest);
+  const instanceId = useUiStore((state) => state.selectedInstanceId);
   const { t } = useTranslation();
   return useMutation({
-    mutationFn: (id: string) => networkService.joinServer(id),
+    mutationFn: (id: string) => networkService.joinServer(id, instanceId),
     onSuccess: (status) => {
       setGuest(status);
       void client.invalidateQueries({ queryKey: qk.networkStatus });
-      toast.success(`Connected to ${status.serverName}`, `Bridge on ${status.localAddress}:${status.localPort}`);
+      void client.invalidateQueries({ queryKey: qk.running });
+      announceJoin(status, t);
     },
     onError: (error) =>
       toast.error(

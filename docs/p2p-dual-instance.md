@@ -1,6 +1,8 @@
-# Dual-instance host and join
+# Host and join
 
-Use this when two launchers need to share a world. No passwords belong in this file or in git.
+The check is cross-machine. The tester hosts on their own desktop. The other system joins with the share code. Do not validate this by opening two copies on the tester's PC.
+
+No passwords belong in this file or in git.
 
 ## Same directory on both sides
 
@@ -23,15 +25,20 @@ If STUN cannot see a public address, the code is still issued. Direct punch is a
 
 ## Join
 
-1. On the second launcher, **Join with a code** and paste the code. Spaces, dashes, and letter case do not matter.
-2. A bad checksum says the code is corrupted (TR and EN). An unknown or expired code says the host is offline or the invite lapsed. A code whose listing body disappeared says the host stopped refreshing — copy a fresh code.
-3. Activity should end on **Connected to …**, not a stuck download. The game connects to `127.0.0.1` on the bridge port from the toast.
+On the other system (not a second window on the host PC):
 
-## Same PC
+1. Select the ready instance that matches the host's game version, then **Join with a code** and paste the code. Spaces, dashes, and letter case do not matter.
+2. The launcher opens the local bridge and starts that instance into it. Minecraft 1.20 and newer receive `--quickPlayMultiplayer 127.0.0.1:<port>`. Older versions still receive `--server` and `--port`. The game should leave the title screen and join the world.
+3. A bad checksum says the code is corrupted (TR and EN). An unknown or expired code says the host is offline or the invite lapsed. A code whose listing body disappeared says the host stopped refreshing — copy a fresh code.
+4. Activity should end on **Connected to …** / the game joining, not a stuck download. After the host's server log prints `Done`, Activity leaves Starting / Downloading.
 
-The launcher is single-instance, so a second copy on the same Windows or Linux user focuses the window that is already open. Use two machines, or a second OS user, and put the same remote Redis URL in both Settings screens.
+## Optional same-machine process
 
-A loopback punch with STUN and the relay down is covered by the automated test below. That path does not need a second desktop process.
+This is not the validation path. The app is single-instance, so a second launch on the same Windows user focuses the window that is already open.
+
+To run a second process anyway, start it with `SXMLAUNCHER_ALLOW_MULTI=joiner` (any value other than `0`, `false`, `no`, or `off`). A name also stores that process under `profiles/<name>` so the two processes do not share one database. `SXMLAUNCHER_PROFILE` overrides the folder name. Both processes still need the same remote Redis URL.
+
+A loopback punch with STUN and the relay down is covered by the automated test below.
 
 ## What the automated checks cover
 

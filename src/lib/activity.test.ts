@@ -179,6 +179,20 @@ describe("activityPresentation", () => {
     expect(view.showProgress).toBe(false);
   });
 
+  it("treats the Minecraft Done line as a live server, not a download", () => {
+    const view = activityPresentation(
+      job({
+        kind: "p2p_host",
+        stage: "running",
+        label: "Minecraft server ready",
+        detail: "Done (3.214s)! For help, type \"help\"",
+      }),
+    );
+    expect(view.mode).toBe("steady");
+    expect(view.status).toBe("Service Running");
+    expect(view.showProgress).toBe(false);
+  });
+
   it("drops a leftover host download once a newer hosting snapshot exists", () => {
     const download = job({
       jobId: "jar",

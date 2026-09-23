@@ -195,16 +195,18 @@ async fn start_dedicated_server(
         });
     }
 
-    sink.report(
-        ProgressEvent::started(JobKind::P2pHost, "Waiting for Minecraft server")
-            .stage(JobStage::Extracting)
-            .detail(address.to_string()),
-    )
-    .await;
+    let waiting = ProgressEvent::started(JobKind::P2pHost, "Waiting for Minecraft server")
+        .stage(JobStage::Launching)
+        .detail(address.to_string())
+        .for_instance(instance.config.id);
+    let waiting_id = waiting.job_id;
+    sink.report(waiting).await;
 
     let child = Arc::new(AsyncMutex::new(child));
     let wait = wait_for_listener(address, Duration::from_secs(120));
     tokio::pin!(wait);
+    let mut log_offset = 0u64;
+    let mut announced_ready = false;
     loop {
         tokio::select! {
             result = &mut wait => {
@@ -220,9 +222,36 @@ async fn start_dedicated_server(
                         log_file.display()
                     )));
                 }
+                drop(guard);
+                if !announced_ready && server_log_says_done(&log_file, &mut log_offset).await {
+                    announced_ready = true;
+                    // The server has printed `Done`. Leave the startup row so
+                    // Activity does not stay on Starting / Downloading.
+                    sink.report(
+                        ProgressEvent::started(JobKind::P2pHost, "Minecraft server ready")
+                            .for_job(waiting_id)
+                            .for_instance(instance.config.id)
+                            .stage(JobStage::Running)
+                            .detail("Done"),
+                    )
+                    .await;
+                }
             }
         }
     }
+
+    sink.report(
+        ProgressEvent::started(JobKind::P2pHost, "Minecraft server ready")
+            .for_job(waiting_id)
+            .for_instance(instance.config.id)
+            .detail(if announced_ready {
+                "Done".to_string()
+            } else {
+                address.to_string()
+            })
+            .finished(),
+    )
+    .await;
 
     Ok(HostedServer {
         address,
@@ -437,6 +466,26 @@ async fn copy_dir_loose(from: &Path, to: &Path) -> AppResult<()> {
     Ok(())
 }
 
+/// Vanilla and Fabric print this once the world is actually playable.
+pub fn minecraft_server_booted(text: &str) -> bool {
+    text.contains("Done (") && text.contains("For help")
+}
+
+async fn server_log_says_done(path: &Path, offset: &mut u64) -> bool {
+    let Ok(meta) = tokio::fs::metadata(path).await else {
+        return false;
+    };
+    if meta.len() <= *offset {
+        return false;
+    }
+    let Ok(bytes) = tokio::fs::read(path).await else {
+        return false;
+    };
+    let start = (*offset as usize).min(bytes.len());
+    *offset = meta.len();
+    minecraft_server_booted(&String::from_utf8_lossy(&bytes[start..]))
+}
+
 async fn tee_lines<R: tokio::io::AsyncRead + Unpin>(reader: R, path: PathBuf) {
     let mut lines = BufReader::new(reader).lines();
     let mut file = tokio::fs::OpenOptions::new()
@@ -457,6 +506,17 @@ async fn tee_lines<R: tokio::io::AsyncRead + Unpin>(reader: R, path: PathBuf) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn server_done_line_is_recognised() {
+        assert!(minecraft_server_booted(
+            "[Server thread/INFO]: Done (3.214s)! For help, type \"help\""
+        ));
+        assert!(!minecraft_server_booted(
+            "[Server thread/INFO]: Preparing spawn area: 100%"
+        ));
+        assert!(!minecraft_server_booted("Done downloading server jar"));
+    }
 
     #[tokio::test]
     async fn allocate_port_returns_nonzero() {

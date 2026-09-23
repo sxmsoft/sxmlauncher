@@ -60,11 +60,13 @@ export function LaunchPanel({
       jobs.find(
         (entry) =>
           entry.instanceId === instance.id &&
+          (!entry.finished || Boolean(entry.error)) &&
           (entry.kind === "instance_install" ||
             entry.kind === "modpack_install" ||
             entry.kind === "launch" ||
             entry.kind === "asset_hydration" ||
-            entry.kind === "java_runtime"),
+            entry.kind === "java_runtime" ||
+            entry.kind === "p2p_host"),
       ) ?? null,
     [jobs, instance.id],
   );

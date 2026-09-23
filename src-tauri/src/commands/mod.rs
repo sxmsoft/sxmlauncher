@@ -86,11 +86,15 @@ pub struct JoinStatus {
     pub id: Uuid,
     pub server_name: String,
     pub mode: ConnectionMode,
-    /// Pass this to the game as `--server` / `--port`.
+    /// Loopback bridge. 1.20+ launches with `--quickPlayMultiplayer`; older
+    /// versions still use `--server` / `--port`.
     pub local_address: String,
     pub local_port: u16,
     pub remote: Option<String>,
     pub rtt_ms: Option<u32>,
+    /// `true` when a ready instance was started into the bridge.
+    pub launched: bool,
+    pub launch_error: Option<String>,
 }
 
 /// Result of a launch request.

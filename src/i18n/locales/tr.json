@@ -123,13 +123,16 @@
     "submit": "Katıl",
     "failedTitle": "Bu kodla katılınamadı",
     "hostFailed": "Sunucu başlatılamadı",
+    "launched": "Minecraft {{name}} dünyasına katılıyor",
+    "launchFailed": "Tünel açık, ancak oyun başlamadı",
     "errors": {
       "INVITE_EXPIRED": "Bu davet süresi doldu ya da sunucu çevrimdışı. Yeni bir kod iste — dünya açıkken kod geçerli kalır.",
       "INVITE_LISTING_GONE": "Sunucunun kaydı süresi doldu. Kodu yeniden kopyalamasını iste; dünya açıkken yenilenir.",
       "INVITE_MALFORMED": "Kod eksik ya da bozuk. Sunucudaki kodun tamamını yapıştır.",
       "DIRECTORY_UNREACHABLE": "Dizine ulaşılamıyor. Ayarlar → Ağ bölümünü kontrol et ve iki başlatıcıda da aynı Redis adresini kullan.",
       "STUN_UNREACHABLE": "STUN sunucularına ulaşılamıyor. Barındırma sürer; doğrudan yol yoksa röle kullanılır.",
-      "JOIN_UNREACHABLE": "Sunucuya doğrudan ya da röle üzerinden ulaşılamadı. Hâlâ açık olduklarından emin ol ve yeniden dene."
+      "JOIN_UNREACHABLE": "Sunucuya doğrudan ya da röle üzerinden ulaşılamadı. Hâlâ açık olduklarından emin ol ve yeniden dene.",
+      "JOIN_NO_INSTANCE": "Tünel açık. Hazır bir instance kur ya da seç, sonra Minecraft bağlansın diye yeniden katıl."
     }
   },
   "profile": {

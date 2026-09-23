@@ -12,6 +12,7 @@ const TOKENS = [
   "DIRECTORY_UNREACHABLE",
   "STUN_UNREACHABLE",
   "JOIN_UNREACHABLE",
+  "JOIN_NO_INSTANCE",
 ] as const;
 
 export type InviteToken = (typeof TOKENS)[number];

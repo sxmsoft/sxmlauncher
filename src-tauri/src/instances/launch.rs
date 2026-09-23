@@ -8,10 +8,11 @@
 //!
 //! ## Joining a P2P session
 //!
-//! [`LaunchExtras::connect`] injects `--server 127.0.0.1 --port <bridge>` so the
-//! player lands in the host's world directly. Because the local port is
-//! allocated per session (never hardcoded to 25565) several sessions can be open
-//! at once without fighting over a port.
+//! [`LaunchExtras::connect`] drops the player into the host's world. Minecraft
+//! 1.20 and newer ignore `--server` / `--port` (`Completely ignored arguments`)
+//! and join through `--quickPlayMultiplayer host:port` instead. Older versions
+//! still get the legacy flags. The local port is allocated per session (never
+//! hardcoded to 25565) so several sessions can be open at once.
 
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -136,10 +137,15 @@ impl LaunchPlanner {
         }
 
         let java = self.select_java(instance)?;
+        let quick_connect = extras
+            .connect
+            .filter(|_| direct_connect_uses_quick_play(instance, version));
         let features = FeatureSet {
             is_demo_user: extras.demo,
             has_custom_resolution: true,
+            has_quick_plays_support: quick_connect.is_some() || extras.quick_play_world.is_some(),
             is_quick_play_singleplayer: extras.quick_play_world.is_some(),
+            is_quick_play_multiplayer: quick_connect.is_some(),
             ..FeatureSet::default()
         };
 
@@ -191,24 +197,33 @@ impl LaunchPlanner {
         substitutions.insert("auth_xuid", identity.xuid.clone().unwrap_or_default());
         substitutions.insert("clientid", identity.client_id.clone().unwrap_or_default());
         substitutions.insert("user_properties", "{}".to_string());
+        let quick_play_log = self
+            .paths
+            .root
+            .join("quickPlay")
+            .join("quickPlayLog.json");
+        if quick_connect.is_some() || extras.quick_play_world.is_some() {
+            if let Some(parent) = quick_play_log.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+        }
         substitutions.insert(
             "quickPlayPath",
-            extras
-                .quick_play_world
-                .as_ref()
-                .map(|_| {
-                    self.paths
-                        .root
-                        .join("quickPlay")
-                        .join("quickPlayLog.json")
-                        .to_string_lossy()
-                        .into_owned()
-                })
-                .unwrap_or_default(),
+            if quick_connect.is_some() || extras.quick_play_world.is_some() {
+                quick_play_log.to_string_lossy().into_owned()
+            } else {
+                String::new()
+            },
         );
         substitutions.insert(
             "quickPlaySingleplayer",
             extras.quick_play_world.clone().unwrap_or_default(),
+        );
+        substitutions.insert(
+            "quickPlayMultiplayer",
+            quick_connect
+                .map(|address| address.to_string())
+                .unwrap_or_default(),
         );
         substitutions.insert("game_assets", String::new());
         substitutions.insert("auth_session_id", String::new());
@@ -304,10 +319,23 @@ impl LaunchPlanner {
 
         // Direct-connect into a mirrored world.
         if let Some(address) = extras.connect {
-            game.push("--server".to_string());
-            game.push(address.ip().to_string());
-            game.push("--port".to_string());
-            game.push(address.port().to_string());
+            if quick_connect.is_some() {
+                // 1.20+ logs `Completely ignored arguments: [--server, --port]`
+                // and stays on the title screen. Quick Play is the path it reads.
+                if !game.iter().any(|arg| arg == "--quickPlayPath") {
+                    game.push("--quickPlayPath".to_string());
+                    game.push(quick_play_log.to_string_lossy().into_owned());
+                }
+                if !game.iter().any(|arg| arg == "--quickPlayMultiplayer") {
+                    game.push("--quickPlayMultiplayer".to_string());
+                    game.push(address.to_string());
+                }
+            } else {
+                game.push("--server".to_string());
+                game.push(address.ip().to_string());
+                game.push("--port".to_string());
+                game.push(address.port().to_string());
+            }
         }
         game.extend(config.game_args.iter().cloned());
 
@@ -435,6 +463,57 @@ impl LaunchPlanner {
         }
         Ok(format!("-javaagent:{}={authlib_url}", jar.display()))
     }
+}
+
+/// Minecraft 1.20 (23w14a) stopped reading `--server` / `--port`.
+pub fn minecraft_uses_quick_play(game_version: &str) -> bool {
+    let version = game_version.trim();
+    if let Some(rest) = version.strip_prefix("1.") {
+        let minor: u32 = rest
+            .chars()
+            .take_while(|ch| ch.is_ascii_digit())
+            .collect::<String>()
+            .parse()
+            .unwrap_or(0);
+        return minor >= 20;
+    }
+    // Snapshots: `23w14a` introduced Quick Play. Later years all have it.
+    let Some(week_mark) = version.find('w') else {
+        return false;
+    };
+    if week_mark != 2 {
+        return false;
+    }
+    let year: u32 = version[..week_mark].parse().unwrap_or(0);
+    let week: u32 = version[week_mark + 1..]
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect::<String>()
+        .parse()
+        .unwrap_or(0);
+    year > 23 || (year == 23 && week >= 14)
+}
+
+fn arguments_include_quick_play(version: &VersionJson) -> bool {
+    let Some(arguments) = &version.arguments else {
+        return false;
+    };
+    arguments.game.iter().any(|entry| match entry {
+        crate::models::version::ArgumentValue::Plain(value) => value.contains("quickPlayMultiplayer"),
+        crate::models::version::ArgumentValue::Guarded { value, .. } => {
+            value.iter().any(|item| item.contains("quickPlayMultiplayer"))
+        }
+    })
+}
+
+fn direct_connect_uses_quick_play(instance: &Instance, version: &VersionJson) -> bool {
+    minecraft_uses_quick_play(&instance.config.game_version)
+        || version
+            .inherits_from
+            .as_deref()
+            .is_some_and(minecraft_uses_quick_play)
+        || minecraft_uses_quick_play(&version.id)
+        || arguments_include_quick_play(version)
 }
 
 /// Replace `${name}` placeholders using the substitution table.
@@ -743,5 +822,106 @@ mod tests {
             "profile id stays on the ignore list, got {ignore}"
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn modern_clients_join_with_quick_play_not_legacy_server_flags() {
+        let plan = connect_plan("1.21.1", "127.0.0.1:45123".parse().unwrap());
+        let args = plan.game_args.join(" ");
+        assert!(
+            args.contains("--quickPlayMultiplayer 127.0.0.1:45123"),
+            "{args}"
+        );
+        assert!(!args.contains("--server"), "{args}");
+        assert!(!args.contains("--port"), "{args}");
+    }
+
+    #[test]
+    fn legacy_clients_still_receive_server_and_port() {
+        let plan = connect_plan("1.19.4", "127.0.0.1:25566".parse().unwrap());
+        let args = plan.game_args.join(" ");
+        assert!(args.contains("--server 127.0.0.1"), "{args}");
+        assert!(args.contains("--port 25566"), "{args}");
+        assert!(!args.contains("quickPlayMultiplayer"), "{args}");
+    }
+
+    #[test]
+    fn quick_play_starts_at_1_20_and_23w14a() {
+        assert!(!minecraft_uses_quick_play("1.19.4"));
+        assert!(minecraft_uses_quick_play("1.20"));
+        assert!(minecraft_uses_quick_play("1.21.4"));
+        assert!(!minecraft_uses_quick_play("23w13a"));
+        assert!(minecraft_uses_quick_play("23w14a"));
+        assert!(minecraft_uses_quick_play("24w09a"));
+    }
+
+    fn connect_plan(game_version: &str, connect: std::net::SocketAddr) -> LaunchPlan {
+        let root = std::env::temp_dir().join(format!("sxm-connect-{}", uuid::Uuid::new_v4().simple()));
+        let paths = AppPaths::from_root(&root);
+        paths.ensure().expect("layout");
+        let client = paths.version_dir(game_version).join(format!("{game_version}.jar"));
+        std::fs::create_dir_all(client.parent().unwrap()).unwrap();
+        std::fs::write(&client, b"jar").unwrap();
+
+        let now = chrono::Utc::now();
+        let id = uuid::Uuid::new_v4();
+        let mut java = crate::models::instance::JavaSettings::default();
+        java.override_path = Some(PathBuf::from("/usr/bin/java"));
+        let instance = crate::models::instance::Instance {
+            config: crate::models::instance::InstanceConfig {
+                id,
+                name: "Join".into(),
+                description: String::new(),
+                icon: None,
+                game_version: game_version.into(),
+                loader: crate::models::instance::ModLoader::vanilla(),
+                java,
+                memory: crate::models::instance::MemorySettings::default(),
+                resolution: crate::models::instance::ResolutionSettings::default(),
+                game_args: Vec::new(),
+                source_pack: None,
+                created_at: now,
+                updated_at: now,
+            },
+            status: crate::models::instance::InstanceStatus::Ready,
+            mod_count: 0,
+            last_played_at: None,
+            total_playtime_secs: 0,
+            launch_count: 0,
+            size_bytes: 0,
+            required_java_major: 21,
+        };
+        let version = VersionJson {
+            id: game_version.into(),
+            inherits_from: None,
+            main_class: Some("net.minecraft.client.main.Main".into()),
+            assets: None,
+            asset_index: None,
+            libraries: Vec::new(),
+            arguments: Some(Arguments {
+                jvm: Vec::new(),
+                game: vec![crate::models::version::ArgumentValue::Plain(
+                    "--username".into(),
+                )],
+            }),
+            minecraft_arguments: None,
+            downloads: None,
+            java_version: None,
+            release_time: None,
+            release_type: None,
+        };
+        let plan = LaunchPlanner::new(paths, Vec::new())
+            .build(
+                &instance,
+                &version,
+                &LaunchIdentity::offline("Steve", uuid::Uuid::nil()),
+                &LaunchExtras {
+                    connect: Some(connect),
+                    ..LaunchExtras::default()
+                },
+            )
+            .expect("plan");
+        let _ = std::fs::remove_dir_all(root);
+        plan
     }
 }
