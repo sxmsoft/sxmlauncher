@@ -2,17 +2,10 @@ import { Download, Play, Zap } from "lucide-react";
 
 import { Badge, StatusDot } from "@/components/ui/badge";
 import { useInstallInstance, useLaunchInstance, useRunningInstances } from "@/hooks/queries";
+import { LOADER_FALLBACK_COLOR, loaderBg, loaderIcon } from "@/lib/loader-assets";
 import { cn, formatRelative } from "@/lib/utils";
 import { useSessionsStore } from "@/stores/sessions";
-import { isPlayable, STATUS_LABEL, type Instance, type LoaderKind } from "@/types/instance";
-
-const COVER: Record<LoaderKind, string> = {
-  vanilla: "linear-gradient(180deg, #5a9c3a 0 38%, #8b6b3a 38% 48%, #6b5230 48%)",
-  fabric: "linear-gradient(145deg, #4c1d95 0%, #8b5cf6 45%, #2e1065 100%)",
-  quilt: "linear-gradient(180deg, #7dd3fc 0 35%, #86efac 35% 55%, #fef08a 55%)",
-  forge: "linear-gradient(145deg, #1e3a5f 0%, #3b82f6 50%, #0f172a 100%)",
-  neoforge: "linear-gradient(135deg, #312e81 0%, #6366f1 40%, #a855f7 100%)",
-};
+import { isPlayable, STATUS_LABEL, type Instance } from "@/types/instance";
 
 /** Library tile: pick an instance, then play it. */
 export function InstanceCard({
@@ -47,19 +40,27 @@ export function InstanceCard({
         }
       }}
       className={cn(
-        "group glass flex min-h-[148px] cursor-pointer flex-col gap-3 rounded-[var(--radius)] p-4 text-left transition-[border-color,box-shadow,transform] duration-150",
+        "group glass flex min-h-[148px] cursor-pointer flex-col overflow-hidden rounded-[var(--radius)] text-left transition-[border-color,box-shadow,transform] duration-150",
         selected
           ? "border-[var(--rim-light)] shadow-[0_0_0_1px_var(--accent-dim),0_8px_28px_var(--accent-dim)]"
           : "hover:-translate-y-px hover:border-[var(--border-strong)]",
       )}
     >
-      <div className="flex items-start gap-3">
-        <div
-          className="size-12 shrink-0 rounded-xl border border-[var(--border)] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
-          style={{ background: COVER[instance.loader.kind] ?? COVER.vanilla }}
-          aria-hidden
+      <div className="relative h-[84px] shrink-0 overflow-hidden" style={{ background: LOADER_FALLBACK_COLOR }}>
+        <img
+          src={loaderBg(instance.loader.kind)}
+          alt=""
+          className="absolute inset-0 size-full scale-110 object-cover blur-[6px]"
         />
-        <div className="min-w-0 flex-1">
+        <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-black/15 to-black/10" />
+        <img
+          src={loaderIcon(instance.loader.kind, 64)}
+          alt=""
+          className="absolute bottom-2.5 left-3.5 size-11 drop-shadow-[0_6px_12px_rgba(0,0,0,0.45)]"
+        />
+      </div>
+      <div className="flex flex-1 flex-col gap-3 p-4">
+        <div className="min-w-0">
           <div className="flex items-center gap-2">
             <h3 className="truncate text-sm font-semibold">{instance.name}</h3>
             {isRunning ? <StatusDot tone="success" pulse /> : null}
@@ -82,24 +83,24 @@ export function InstanceCard({
             {!playable ? <Badge variant="warning">{STATUS_LABEL[instance.status]}</Badge> : null}
           </div>
         </div>
-      </div>
 
-      <div className="mt-auto flex items-center justify-between border-t border-[var(--border)] pt-3">
-        <span className="text-[11px] text-[var(--text-faint)]">
-          {instance.lastPlayedAt ? `Last played ${formatRelative(instance.lastPlayedAt)}` : "Never played"}
-        </span>
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            if (playable) launch.mutate({ id: instance.id });
-            else install.mutate(instance.id);
-          }}
-          className="inline-flex h-[30px] items-center gap-1 rounded-lg border border-[rgba(52,211,153,0.25)] bg-[var(--success-dim)] px-3 text-xs font-semibold text-[var(--success)] opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
-        >
-          {playable ? <Play className="size-3 fill-current" /> : <Download className="size-3" />}
-          {playable ? (isRunning ? "Running" : "Play") : "Install"}
-        </button>
+        <div className="mt-auto flex items-center justify-between border-t border-[var(--border)] pt-3">
+          <span className="text-[11px] text-[var(--text-faint)]">
+            {instance.lastPlayedAt ? `Last played ${formatRelative(instance.lastPlayedAt)}` : "Never played"}
+          </span>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              if (playable) launch.mutate({ id: instance.id });
+              else install.mutate(instance.id);
+            }}
+            className="inline-flex h-[30px] items-center gap-1 rounded-lg border border-[rgba(52,211,153,0.25)] bg-[var(--success-dim)] px-3 text-xs font-semibold text-[var(--success)] opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+          >
+            {playable ? <Play className="size-3 fill-current" /> : <Download className="size-3" />}
+            {playable ? (isRunning ? "Running" : "Play") : "Install"}
+          </button>
+        </div>
       </div>
     </article>
   );

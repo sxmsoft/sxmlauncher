@@ -81,7 +81,7 @@ export function LaunchPanel({
     <div className="flex flex-col gap-4">
       <div className="grid items-stretch gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
         <section className="relative min-h-[460px] overflow-hidden rounded-[28px] border border-white/10 shadow-[0_24px_80px_rgba(0,0,0,0.45)]">
-          <HeroBackdrop />
+          <HeroBackdrop loader={instance.loader.kind} />
           <div className="relative flex min-h-[460px] flex-col justify-end gap-5 p-8">
             <span className="glass-pill inline-flex w-fit items-center gap-2 px-3 py-1 text-[11px] font-medium text-white/90">
               <span
