@@ -6,10 +6,10 @@ import { StatusDot } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { IndeterminateProgress, Progress } from "@/components/ui/progress";
 import { useNetworkStatus, useRunningInstances } from "@/hooks/queries";
-import { cn, formatBytes, percent } from "@/lib/utils";
+import { activityPresentation } from "@/lib/activity";
+import { cn, formatBytes } from "@/lib/utils";
 import { aggregateProgress, useJobsStore } from "@/stores/jobs";
 import { useSessionsStore } from "@/stores/sessions";
-import { STAGE_LABEL } from "@/types/modpack";
 
 /**
  * Bottom strip: what the app is doing right now.
@@ -43,36 +43,38 @@ export function StatusStrip() {
     setRate(active.reduce((sum, job) => sum + job.bytesPerSecond, 0));
   }, [active]);
 
-  const downloadLike = current?.stage === "downloading" || current?.stage === "verifying";
-  const value = current ? percent(current.completedUnits, current.totalUnits) : 0;
-  const isActive = current != null && !current.finished && !current.error;
+  const view = current ? activityPresentation(current) : null;
+  const downloadLike = view?.mode === "work" && (current?.bytesPerSecond ?? 0) > 0;
+  const isActive = current != null && !current.finished && !current.error && view?.mode === "work";
   const isCancelling = current != null && cancelling.includes(current.jobId);
 
   return (
     <footer className="flex h-8 shrink-0 items-center gap-3 border-t border-[var(--border)] bg-[color-mix(in_srgb,var(--surface-1)_80%,transparent)] px-3 font-mono text-[11px]">
       {current ? (
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          {current.error ? (
+          {view?.mode === "error" || current.error ? (
             <StatusDot tone="destructive" />
-          ) : current.finished ? (
-            <StatusDot tone="success" />
+          ) : view?.mode === "steady" || current.finished ? (
+            <StatusDot tone="success" pulse={view?.mode === "steady" && !current.finished} />
           ) : (
             <StatusDot tone="primary" pulse />
           )}
           <span className="truncate font-medium">
-            {isCancelling ? "Stopping" : STAGE_LABEL[current.stage]} · {current.label}
+            {isCancelling ? "Stopping" : `${view?.status ?? ""} · ${current.label}`}
           </span>
           <span className="text-muted-foreground hidden truncate sm:inline">
             {current.currentItem ?? current.detail ?? ""}
           </span>
 
-          <div className="ml-2 hidden w-44 shrink-0 md:block">
-            {current.totalUnits > 0 ? (
-              <Progress value={value} className="h-1.5" />
-            ) : (
-              <IndeterminateProgress className="h-1.5" />
-            )}
-          </div>
+          {view?.showProgress ? (
+            <div className="ml-2 hidden w-44 shrink-0 md:block">
+              {view.progress == null ? (
+                <IndeterminateProgress className="h-1.5" />
+              ) : (
+                <Progress value={view.progress} className="h-1.5" />
+              )}
+            </div>
+          ) : null}
 
           {downloadLike && rate > 0 ? (
             <span className="text-muted-foreground shrink-0 tabular-nums">
@@ -86,11 +88,13 @@ export function StatusStrip() {
             </span>
           ) : null}
 
-          <span className="text-muted-foreground ml-auto shrink-0 tabular-nums">
-            {current.totalUnits > 0
-              ? `${Math.round(value)}%`
-              : `${Math.round(aggregate.percent)}%`}
-          </span>
+          {view?.showProgress ? (
+            <span className="text-muted-foreground ml-auto shrink-0 tabular-nums">
+              {view.progress != null
+                ? `${Math.round(view.progress)}%`
+                : `${Math.round(aggregate.percent)}%`}
+            </span>
+          ) : null}
 
           {isActive ? (
             <Button

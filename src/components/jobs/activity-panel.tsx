@@ -4,9 +4,10 @@ import { Badge, StatusDot } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { IndeterminateProgress, Progress } from "@/components/ui/progress";
 import { useKillInstance, useRunningInstances } from "@/hooks/queries";
+import { activityPresentation } from "@/lib/activity";
 import { aggregateProgress, useJobsStore } from "@/stores/jobs";
 import { useUiStore } from "@/stores/ui";
-import { STAGE_LABEL, type JobKind, type ProgressEvent } from "@/types/modpack";
+import type { JobKind, ProgressEvent } from "@/types/modpack";
 
 const KIND_LABEL: Record<JobKind, string> = {
   instance_install: "Instance",
@@ -36,7 +37,11 @@ export function ActivityPanel() {
 
   const active = jobs.filter((job) => !job.finished && !job.error);
   const done = jobs.filter((job) => job.finished || job.error);
-  const aggregate = aggregateProgress(active);
+  const views = active.map((job) => activityPresentation(job));
+  const workCount = views.filter((view) => view.mode === "work").length;
+  const steadyCount = views.filter((view) => view.mode === "steady").length;
+  const errorCount = views.filter((view) => view.mode === "error").length;
+  const aggregate = aggregateProgress(active.filter((_, index) => views[index]?.mode === "work"));
 
   if (!open) return null;
 
@@ -51,11 +56,15 @@ export function ActivityPanel() {
         <div className="flex items-center gap-2">
           <ListVideo className="size-4 text-[var(--primary)]" />
           <h2 className="flex-1 text-sm font-semibold tracking-tight">Activity</h2>
-          {active.length > 0 ? (
+          {workCount > 0 ? (
             <Badge variant="primary">
-              {active.length} running
+              {workCount} active
               {aggregate.total > 0 ? ` · ${Math.round(aggregate.percent)}%` : ""}
             </Badge>
+          ) : steadyCount > 0 ? (
+            <Badge variant="success">{steadyCount} running</Badge>
+          ) : errorCount > 0 ? (
+            <Badge variant="destructive">{errorCount} failed</Badge>
           ) : (
             <Badge variant="outline">idle</Badge>
           )}
@@ -119,15 +128,41 @@ function ActiveJobRow({ job }: { job: ProgressEvent }) {
   const cancelling = useJobsStore((state) => state.cancelling);
   const cancel = useJobsStore((state) => state.cancel);
   const stopping = cancelling.includes(job.jobId);
-  const fraction =
-    job.totalUnits > 0 ? Math.min(100, (job.completedUnits / job.totalUnits) * 100) : null;
+  const view = activityPresentation(job);
+  const extra =
+    view.mode === "work"
+      ? (job.currentItem ?? job.detail)
+      : view.mode === "steady"
+        ? job.detail
+        : null;
+  const status = stopping ? "Stopping…" : view.status;
+  const showExtra = extra != null && extra !== "" && extra !== status && extra !== job.label;
 
   return (
-    <div className="flex flex-col gap-1.5 rounded-xl border border-white/8 bg-black/25 p-3">
+    <div
+      className={
+        "flex flex-col gap-1.5 rounded-xl border bg-black/25 p-3 " +
+        (view.mode === "error"
+          ? "border-[color-mix(in_srgb,var(--destructive)_45%,transparent)]"
+          : "border-white/8")
+      }
+    >
       <div className="flex items-center gap-2">
-        <StatusDot tone="primary" pulse />
-        <span className="min-w-0 flex-1 truncate text-xs font-medium">{job.label}</span>
-        <Badge variant="outline">{KIND_LABEL[job.kind]}</Badge>
+        <StatusDot
+          tone={view.mode === "error" ? "destructive" : view.mode === "steady" ? "success" : "primary"}
+          pulse={view.mode === "steady"}
+        />
+        <span
+          className={
+            "min-w-0 flex-1 truncate text-xs font-medium " +
+            (view.mode === "error" ? "text-[var(--destructive)]" : "")
+          }
+        >
+          {job.label}
+        </span>
+        <Badge variant={view.mode === "error" ? "destructive" : view.mode === "steady" ? "success" : "outline"}>
+          {view.mode === "error" ? "Failed" : KIND_LABEL[job.kind]}
+        </Badge>
         <Button
           variant="ghost"
           size="icon-sm"
@@ -138,21 +173,32 @@ function ActiveJobRow({ job }: { job: ProgressEvent }) {
           <Ban className="size-3.5" />
         </Button>
       </div>
-      <div className="text-muted-foreground truncate text-[11px]">
-        {stopping ? "Stopping…" : STAGE_LABEL[job.stage]}
-        {job.currentItem ? ` · ${job.currentItem}` : job.detail ? ` · ${job.detail}` : ""}
+      <div
+        className={
+          "truncate text-[11px] " +
+          (view.mode === "error"
+            ? "text-[var(--destructive)]"
+            : view.mode === "steady"
+              ? "text-[var(--success)]"
+              : "text-muted-foreground")
+        }
+      >
+        {status}
+        {showExtra ? ` · ${extra}` : ""}
       </div>
-      {fraction == null ? (
-        <IndeterminateProgress className="h-1.5" />
-      ) : (
-        <div className="flex items-center gap-2">
-          <Progress value={fraction} className="h-1.5 flex-1" />
-          <span className="text-muted-foreground shrink-0 text-[10px] tabular-nums">
-            {Math.round(fraction)}%
-          </span>
-        </div>
-      )}
-      {job.bytesPerSecond > 0 ? (
+      {view.showProgress ? (
+        view.progress == null ? (
+          <IndeterminateProgress className="h-1.5" />
+        ) : (
+          <div className="flex items-center gap-2">
+            <Progress value={view.progress} className="h-1.5 flex-1" />
+            <span className="text-muted-foreground shrink-0 text-[10px] tabular-nums">
+              {Math.round(view.progress)}%
+            </span>
+          </div>
+        )
+      ) : null}
+      {view.mode === "work" && job.bytesPerSecond > 0 ? (
         <div className="text-muted-foreground text-[10px] tabular-nums">
           {(job.bytesPerSecond / 1_048_576).toFixed(1)} MiB/s
         </div>
