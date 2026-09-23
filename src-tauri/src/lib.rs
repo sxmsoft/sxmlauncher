@@ -4,7 +4,7 @@
 //!
 //! | module      | responsibility                                               |
 //! |-------------|--------------------------------------------------------------|
-//! | `auth`      | Microsoft / Ely.by / offline accounts, token vault           |
+//! | `auth`      | Microsoft / Ely.by / sx.acc / offline accounts, token vault  |
 //! | `instances` | isolated game environments: install, launch, import          |
 //! | `mods`      | Modrinth + CurseForge, `.mrpack`, downloads, Java runtimes   |
 //! | `network`   | Redis directory, NAT traversal, P2P tunnel, session control  |
@@ -67,9 +67,10 @@ pub fn run() {
             let state = tauri::async_runtime::block_on(AppState::initialize(&handle))?;
             app.manage(state);
 
-            // Register `ms-xal-00000000402b5328` so the system browser can
-            // return the Minecraft sign-in to this process. A cold start that
-            // was itself opened by that URL is handled from argv below.
+            // Register `ms-xal-00000000402b5328` (Microsoft) and `sxmlauncher`
+            // (sx.acc OAuth) so the system browser can return sign-in to this
+            // process. A cold start opened by one of those URLs is handled
+            // from argv below.
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
                 app.deep_link().on_open_url(|event| {
@@ -130,6 +131,11 @@ pub fn run() {
             commands::account::account_begin_login,
             commands::account::account_complete_login,
             commands::account::account_login_elyby_password,
+            commands::account::account_login_sxacc_password,
+            commands::account::account_register_sxacc,
+            commands::account::account_sxacc_capabilities,
+            commands::account::account_begin_sxacc_device,
+            commands::account::account_complete_sxacc_device,
             commands::account::account_refresh,
             commands::account::account_upload_skin,
             commands::account::account_sign_out,

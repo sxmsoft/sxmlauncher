@@ -211,7 +211,7 @@ export function SkinPage() {
     });
   };
 
-  const canUpload = shown?.provider === "microsoft";
+  const canUpload = shown?.provider === "microsoft" || shown?.provider === "sx_acc";
   const uploadHint =
     shown == null
       ? null
@@ -219,7 +219,9 @@ export function SkinPage() {
         ? t("profile.uploadMicrosoft")
         : shown.provider === "ely_by"
           ? t("profile.uploadEly")
-          : t("profile.uploadOffline");
+          : shown.provider === "sx_acc"
+            ? t("profile.uploadSxacc")
+            : t("profile.uploadOffline");
 
   return (
     <div
@@ -419,7 +421,7 @@ export function SkinPage() {
           <div className="flex flex-col gap-4">
             <Card className="flex flex-row items-center gap-3.5 p-4">
               <div className="grid size-10 shrink-0 place-items-center rounded-[10px] border border-[var(--border)] bg-[#2f2f2f] text-[11px] font-bold text-[#00a4ef]">
-                {shown.provider === "microsoft" ? "MS" : shown.provider === "ely_by" ? "EL" : "OFF"}
+                {shown.provider === "microsoft" ? "MS" : shown.provider === "ely_by" ? "EL" : shown.provider === "sx_acc" ? "SX" : "OFF"}
               </div>
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-semibold">
@@ -450,7 +452,7 @@ export function SkinPage() {
               >
                 <UserPlus className="mb-2 size-3.5 text-[var(--accent-soft)]" />
                 <div className="text-[13px] font-semibold">Add account</div>
-                <div className="text-[11px] text-[var(--text-faint)]">Microsoft or Ely.by</div>
+                <div className="text-[11px] text-[var(--text-faint)]">Microsoft, Ely.by, or sx.acc</div>
               </button>
               <button
                 type="button"

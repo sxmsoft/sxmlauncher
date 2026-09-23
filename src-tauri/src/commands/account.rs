@@ -1,4 +1,4 @@
-//! Account commands: the three sign-in providers plus session maintenance.
+//! Account commands: Microsoft, Ely.by, sx.acc, and offline, plus session maintenance.
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -63,6 +63,7 @@ pub async fn account_begin_login(
     let pending = match provider {
         AccountProvider::Microsoft => accounts.begin_msa_login().await?,
         AccountProvider::ElyBy => accounts.begin_elyby_login().await?,
+        AccountProvider::SxAcc => accounts.begin_sxacc_login().await?,
         AccountProvider::Offline => {
             return Err(AppError::Config(
                 "offline accounts are created with account_login_offline".to_string(),
@@ -94,6 +95,7 @@ pub async fn account_complete_login(
     match pending.provider {
         AccountProvider::Microsoft => accounts.complete_msa_login(pending).await,
         AccountProvider::ElyBy => accounts.complete_elyby_login(pending).await,
+        AccountProvider::SxAcc => accounts.complete_sxacc_login(pending).await,
         AccountProvider::Offline => Err(AppError::Config(
             "offline accounts do not use the browser flow".to_string(),
         )),
@@ -108,6 +110,54 @@ pub async fn account_login_elyby_password(
     state: State<'_, AppState>,
 ) -> AppResult<AccountSummary> {
     state.accounts().login_elyby_password(&username, &password).await
+}
+
+/// sx.acc email (or username) and password.
+#[tauri::command]
+pub async fn account_login_sxacc_password(
+    email: String,
+    password: String,
+    state: State<'_, AppState>,
+) -> AppResult<AccountSummary> {
+    state.accounts().login_sxacc_password(&email, &password).await
+}
+
+/// Create an sx.acc account on the configured server and sign in with it.
+#[tauri::command]
+pub async fn account_register_sxacc(
+    email: String,
+    password: String,
+    username: String,
+    state: State<'_, AppState>,
+) -> AppResult<AccountSummary> {
+    state
+        .accounts()
+        .register_sxacc(&email, &password, &username)
+        .await
+}
+
+/// Which sx.acc flows the configured base URL currently exposes.
+#[tauri::command]
+pub async fn account_sxacc_capabilities(
+    state: State<'_, AppState>,
+) -> AppResult<crate::auth::sxacc::SxAccCapabilities> {
+    Ok(state.accounts().sxacc_capabilities().await)
+}
+
+/// sx.acc device-code grant (RFC 8628), when the server exposes one.
+#[tauri::command]
+pub async fn account_begin_sxacc_device(
+    state: State<'_, AppState>,
+) -> AppResult<crate::auth::sxacc::SxAccDevicePrompt> {
+    state.accounts().begin_sxacc_device().await
+}
+
+#[tauri::command]
+pub async fn account_complete_sxacc_device(
+    prompt: crate::auth::sxacc::SxAccDevicePrompt,
+    state: State<'_, AppState>,
+) -> AppResult<AccountSummary> {
+    state.accounts().complete_sxacc_device(&prompt).await
 }
 
 /// Force a session refresh (Settings → Refresh).

@@ -189,7 +189,7 @@ export function SettingsPage() {
           {section === "downloads" ? <DownloadsSection draft={draft} patch={patch} /> : null}
           {section === "defaults" ? <DefaultsSection draft={draft} patch={patch} /> : null}
           {section === "network" ? <NetworkSection draft={draft} patch={patch} /> : null}
-          {section === "accounts" ? <AccountsSection /> : null}
+          {section === "accounts" ? <AccountsSection draft={draft} patch={patch} /> : null}
           {section === "storage" ? <StorageSection /> : null}
           {section === "updates" ? <UpdatesSection /> : null}
           {section === "diagnostics" ? <DiagnosticsSection /> : null}
@@ -577,8 +577,9 @@ function NetworkSection({ draft, patch }: SectionProps) {
   );
 }
 
-function AccountsSection() {
+function AccountsSection({ draft, patch }: SectionProps) {
   const vault = useVaultBackend();
+  const { t } = useTranslation();
 
   return (
     <Card>
@@ -586,6 +587,16 @@ function AccountsSection() {
         <CardTitle>Accounts</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
+        <Field label={t("settings.sxaccBase")} hint={t("settings.sxaccBaseHint")} htmlFor="sxacc-base">
+          <Input
+            id="sxacc-base"
+            value={draft.sxaccBaseUrl}
+            onChange={(event) => patch({ sxaccBaseUrl: event.target.value.trim() })}
+            placeholder="http://127.0.0.1:8787"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </Field>
         <div className="flex items-center gap-3">
           <AccountMenu />
           <span className="text-muted-foreground text-xs">
@@ -598,7 +609,7 @@ function AccountsSection() {
           <Stat label="Vault backend" value={vault.data ?? "unknown"} />
           <Stat
             label="Providers"
-            value="Microsoft · Ely.by · Offline"
+            value="Microsoft · Ely.by · sx.acc · Offline"
           />
         </div>
         <p className="text-muted-foreground text-xs leading-relaxed">

@@ -122,13 +122,14 @@ export function SkinPreview({ account, className }: { account: AccountSummary; c
   const refresh = useRefreshSkin();
   const refreshAccount = useRefreshAccount();
   const cape = publicTextureUrl(capeUrl(account));
+  const ownTexture = account.provider === "ely_by" || account.provider === "sx_acc";
   const texture =
     account.provider === "ely_by" ? elySkinUrl(account) : publicTextureUrl(account.skin.skinUrl);
   const [mode, setMode] = useState<"loading" | "texture" | "heads" | "fallback" | "mono">("loading");
 
   useEffect(() => {
     if (!texture) {
-      setMode(account.provider === "ely_by" ? "mono" : "heads");
+      setMode(ownTexture ? "mono" : "heads");
       return;
     }
     let cancelled = false;
@@ -137,13 +138,13 @@ export function SkinPreview({ account, className }: { account: AccountSummary; c
       if (!cancelled) setMode("texture");
     };
     img.onerror = () => {
-      if (!cancelled) setMode(account.provider === "ely_by" ? "mono" : "heads");
+      if (!cancelled) setMode(ownTexture ? "mono" : "heads");
     };
     img.src = texture;
     return () => {
       cancelled = true;
     };
-  }, [texture, account.provider, account.id]);
+  }, [texture, account.provider, account.id, ownTexture]);
 
   const bodySrc = mode === "heads" ? bodyUrl(account, 320) : mode === "fallback" ? bodyUrlFallback(account, 320) : null;
   const canRefresh = account.provider !== "offline";
@@ -226,10 +227,12 @@ export function SkinPreview({ account, className }: { account: AccountSummary; c
 
         <p className="text-muted-foreground text-xs leading-relaxed">
           {account.provider === "offline"
-            ? "Offline profiles render the default skin. Sign in with Microsoft or Ely.by to use your own custom skin."
+            ? "Offline profiles render the default skin. Sign in with Microsoft, Ely.by, or sx.acc to use your own custom skin."
             : account.provider === "ely_by"
               ? t("profile.authlibNote")
-              : "Microsoft accounts use the official Mojang skin service — change your skin at minecraft.net and press “Reload skin” to fetch it here."}
+              : account.provider === "sx_acc"
+                ? t("profile.authlibSxacc")
+                : "Microsoft accounts use the official Mojang skin service — change your skin at minecraft.net and press “Reload skin” to fetch it here."}
         </p>
       </CardContent>
     </Card>

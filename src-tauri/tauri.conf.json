@@ -28,7 +28,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost https://asset.localhost https: data: blob:; media-src 'self' asset: http://asset.localhost https://asset.localhost blob: data: mediacache:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost https: wss: ws:",
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost https://asset.localhost https: http: data: blob:; media-src 'self' asset: http://asset.localhost https://asset.localhost blob: data: mediacache:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost https: wss: ws:",
       "assetProtocol": {
         "enable": true,
         "scope": [
@@ -77,7 +77,7 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["ms-xal-00000000402b5328"]
+        "schemes": ["ms-xal-00000000402b5328", "sxmlauncher"]
       }
     },
     "updater": {

@@ -6,9 +6,9 @@ use uuid::Uuid;
 
 /// Which identity provider backs an account.
 ///
-/// The three providers share the same downstream shape (username + UUID +
-/// access token) but differ completely in how that material is obtained and
-/// refreshed, so the provider tag travels with the account everywhere.
+/// Providers share the same downstream shape (username + UUID + access token)
+/// but differ completely in how that material is obtained and refreshed, so
+/// the provider tag travels with the account everywhere.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AccountProvider {
@@ -18,6 +18,8 @@ pub enum AccountProvider {
     ElyBy,
     /// Local-only profile, `OfflinePlayer:<name>` UUID, no network session.
     Offline,
+    /// sx.acc account API (`{BASE}/v1`) plus authlib at `{BASE}/authlib/`.
+    SxAcc,
 }
 
 impl AccountProvider {
@@ -27,6 +29,7 @@ impl AccountProvider {
             AccountProvider::Microsoft => "microsoft",
             AccountProvider::ElyBy => "ely_by",
             AccountProvider::Offline => "offline",
+            AccountProvider::SxAcc => "sx_acc",
         }
     }
 
@@ -35,6 +38,7 @@ impl AccountProvider {
             "microsoft" => Some(AccountProvider::Microsoft),
             "ely_by" => Some(AccountProvider::ElyBy),
             "offline" => Some(AccountProvider::Offline),
+            "sx_acc" => Some(AccountProvider::SxAcc),
             _ => None,
         }
     }
@@ -250,11 +254,14 @@ pub struct LaunchIdentity {
     pub client_id: Option<String>,
     /// Offline sessions log in as `player<random>` to the local server.
     pub offline: bool,
-    /// Authlib-injector endpoint (Ely.by and other Yggdrasil servers). When set
-    /// the launcher must add `-javaagent:authlib-injector.jar=<url>` to the JVM
-    /// arguments, otherwise skins and the session are wrong.
+    /// Authlib-injector endpoint (Ely.by, sx.acc, and other Yggdrasil servers).
+    /// When set the launcher must add `-javaagent:authlib-injector.jar=<url>`
+    /// to the JVM arguments, otherwise skins and the session are wrong.
     #[serde(default)]
     pub authlib_url: Option<String>,
+    /// Appended to Minecraft's `--versionType` (`release` → `release/sx.acc`).
+    #[serde(default)]
+    pub version_type_suffix: Option<String>,
 }
 
 impl LaunchIdentity {
@@ -269,9 +276,54 @@ impl LaunchIdentity {
             client_id: None,
             offline: true,
             authlib_url: None,
+            version_type_suffix: None,
+        }
+    }
+
+    /// `--versionType` value. sx.acc sessions read `release/sx.acc`.
+    pub fn version_type(&self, release_type: Option<&str>) -> String {
+        let base = release_type
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("release");
+        match self
+            .version_type_suffix
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            Some(suffix) => format!("{base}/{suffix}"),
+            None => base.to_string(),
         }
     }
 }
 
 /// Marker alias documenting that a `Uuid` is a Minecraft account UUID.
 pub type MinecraftUuid = Uuid;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sx_acc_version_type_keeps_the_release_prefix() {
+        let mut identity = LaunchIdentity::offline("Steve", Uuid::nil());
+        assert_eq!(identity.version_type(Some("release")), "release");
+        assert_eq!(identity.version_type(None), "release");
+        identity.version_type_suffix = Some("sx.acc".into());
+        assert_eq!(identity.version_type(Some("release")), "release/sx.acc");
+        assert_eq!(identity.version_type(Some("snapshot")), "snapshot/sx.acc");
+        assert_eq!(identity.version_type(Some("  ")), "release/sx.acc");
+    }
+
+    #[test]
+    fn provider_wire_name_for_sx_acc_is_snake_case() {
+        assert_eq!(AccountProvider::SxAcc.as_str(), "sx_acc");
+        assert_eq!(
+            AccountProvider::from_str_opt("sx_acc"),
+            Some(AccountProvider::SxAcc)
+        );
+        let json = serde_json::to_string(&AccountProvider::SxAcc).expect("json");
+        assert_eq!(json, "\"sx_acc\"");
+    }
+}

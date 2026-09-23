@@ -50,7 +50,7 @@ export interface PlayerCount {
 export interface ServerOwner {
   name: string;
   uuid: string;
-  provider: "microsoft" | "ely_by" | "offline";
+  provider: "microsoft" | "ely_by" | "offline" | "sx_acc";
 }
 
 export interface ModpackRef {

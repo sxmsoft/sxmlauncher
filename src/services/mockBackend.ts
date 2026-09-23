@@ -165,6 +165,24 @@ const offlineAccount: AccountSummary = {
   lastUsedAt: now(),
 };
 
+let sxAccount: AccountSummary | null = null;
+let activeAccountId = account.id;
+
+function rememberAccount(summary: AccountSummary): AccountSummary {
+  if (summary.provider === "sx_acc") {
+    sxAccount = summary;
+    activeAccountId = summary.id;
+  }
+  return summary;
+}
+
+function activeMockAccount(): AccountSummary {
+  if (sxAccount?.id === activeAccountId) return sxAccount;
+  if (elyAccount.id === activeAccountId) return elyAccount;
+  if (offlineAccount.id === activeAccountId) return offlineAccount;
+  return account;
+}
+
 const settings: AppSettings = {
   maxConcurrentDownloads: 12,
   reDownloadOnHashMismatch: true,
@@ -178,6 +196,7 @@ const settings: AppSettings = {
   elybyClientId: "sxmlauncher3",
   elybyClientSecret: null,
   elybyRedirectUri: "http://localhost:25564/elyby/callback",
+  sxaccBaseUrl: "",
   redisUrl: "redis://127.0.0.1:6379/0",
   mqttBroker: "broker.emqx.io",
   mqttPort: 8883,
@@ -435,8 +454,11 @@ export function mockResponse(command: string, args?: Record<string, unknown>): u
     // --- system ---------------------------------------------------------
     case "settings_get":
       return settings;
-    case "settings_update":
-      return (args?.settings as AppSettings | undefined) ?? settings;
+    case "settings_update": {
+      const next = args?.settings as AppSettings | undefined;
+      if (next) Object.assign(settings, next);
+      return settings;
+    }
     case "discord_presence_set":
       return { enabled: false };
     case "discord_presence_clear":
@@ -501,15 +523,95 @@ export function mockResponse(command: string, args?: Record<string, unknown>): u
 
     // --- accounts -------------------------------------------------------
     case "account_list":
-      return [account, elyAccount, offlineAccount];
+      return [account, elyAccount, offlineAccount, ...(sxAccount ? [sxAccount] : [])];
     case "account_active":
-      return account;
-    case "account_set_active":
-      return account;
+      return activeMockAccount();
+    case "account_set_active": {
+      activeAccountId = String(args?.id ?? account.id);
+      return activeMockAccount();
+    }
     case "account_vault_backend":
       return "browser-preview";
     case "account_login_offline":
       return { ...offlineAccount, username: String(args?.username ?? "Player") };
+    case "account_sxacc_capabilities": {
+      const configured = settings.sxaccBaseUrl.trim().length > 0;
+      return {
+        configured,
+        reachable: configured,
+        password: configured,
+        register: configured,
+        oauth: configured,
+        device: configured,
+        message: configured
+          ? null
+          : "Set the sx.acc base URL in Settings, or export SXACC_BASE_URL.",
+      };
+    }
+    case "account_login_sxacc_password":
+    case "account_register_sxacc": {
+      if (!settings.sxaccBaseUrl.trim()) {
+        throw new Error(
+          "sx.acc base URL is not set. Add it in Settings → Accounts, or export SXACC_BASE_URL.",
+        );
+      }
+      const username = String(args?.username ?? (args?.email ? String(args.email).split("@")[0] : "sxplayer"));
+      return rememberAccount({
+        id: "sxacc-preview",
+        provider: "sx_acc",
+        username: username || "sxplayer",
+        uuid: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        skin: {
+          model: "classic",
+          skinUrl: null,
+          capeUrl: null,
+        },
+        hasStoredCredentials: true,
+        expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+        lastUsedAt: now(),
+      });
+    }
+    case "account_begin_login":
+      if (args?.provider !== "sx_acc") return undefined;
+      return {
+        loginId: "sxacc-oauth",
+        provider: "sx_acc",
+        authorizeUrl: "https://example.invalid/oauth",
+        redirectUri: "sxmlauncher://auth/callback",
+      };
+    case "account_complete_login":
+      if (args?.loginId !== "sxacc-oauth") return undefined;
+      return rememberAccount({
+        id: "sxacc-preview",
+        provider: "sx_acc",
+        username: "sxplayer",
+        uuid: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        skin: { model: "classic", skinUrl: null, capeUrl: null },
+        hasStoredCredentials: true,
+        expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+        lastUsedAt: now(),
+      });
+    case "account_begin_sxacc_device":
+      return {
+        userCode: "SX-ACC",
+        verificationUri: "https://example.invalid/device",
+        message: "Enter this code",
+        expiresIn: 900,
+        interval: 5,
+        deviceCode: "device",
+        tokenUrl: "https://example.invalid/v1/oauth/token",
+      };
+    case "account_complete_sxacc_device":
+      return rememberAccount({
+        id: "sxacc-preview",
+        provider: "sx_acc",
+        username: "sxplayer",
+        uuid: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        skin: { model: "classic", skinUrl: null, capeUrl: null },
+        hasStoredCredentials: true,
+        expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+        lastUsedAt: now(),
+      });
     case "account_refresh":
       return account;
     case "account_refresh_skin": {

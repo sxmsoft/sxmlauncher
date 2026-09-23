@@ -270,6 +270,9 @@ pub struct AppSettings {
     pub elyby_client_secret: Option<String>,
     /// Exact loopback redirect URI registered for the Ely.by application.
     pub elyby_redirect_uri: String,
+    /// sx.acc origin (`{BASE}/v1` account API, `{BASE}/authlib/` injector).
+    /// Empty until the user sets it. `SXACC_BASE_URL` overrides this.
+    pub sxacc_base_url: String,
 
     // --- p2p / hosting --------------------------------------------------
     pub redis_url: String,
@@ -352,6 +355,7 @@ impl Default for AppSettings {
             elyby_redirect_uri: format!(
                 "http://localhost:{ELYBY_DEFAULT_REDIRECT_PORT}/elyby/callback"
             ),
+            sxacc_base_url: String::new(),
             redis_url: "redis://127.0.0.1:6379/0".to_string(),
             mqtt_broker: crate::network::mqtt::DEFAULT_MQTT_BROKER.to_string(),
             mqtt_port: crate::network::mqtt::DEFAULT_MQTT_PORT,
@@ -432,6 +436,11 @@ impl AppSettings {
                 self.elyby_redirect_uri = uri;
             }
         }
+        if let Ok(url) = std::env::var("SXACC_BASE_URL") {
+            if !url.trim().is_empty() {
+                self.sxacc_base_url = url;
+            }
+        }
         if let Ok(id) = std::env::var("SXML_DISCORD_APPLICATION_ID") {
             if !id.trim().is_empty() {
                 self.discord_application_id = id;
@@ -469,6 +478,8 @@ impl AppSettings {
         if !self.elyby_redirect_uri.starts_with("http://") {
             self.elyby_redirect_uri = AppSettings::default().elyby_redirect_uri;
         }
+        self.sxacc_base_url =
+            crate::auth::sxacc::normalize_base_url(&self.sxacc_base_url).unwrap_or_default();
         // UI: an unknown background kind or accent would leave the window with no
         // styling at all, so both are whitelisted here rather than in the CSS.
         if !["aurora", "image", "video"].contains(&self.ui_background_kind.as_str()) {
@@ -604,6 +615,7 @@ mod tests {
         assert!(parsed.lan_discovery);
         assert_eq!(parsed.ui_background_kind, "aurora");
         assert!(parsed.discord_application_id.is_empty());
+        assert!(parsed.sxacc_base_url.is_empty());
     }
 
     #[test]
@@ -616,10 +628,15 @@ mod tests {
         settings.ui_accent = "chartreuse".into();
         settings.ui_background_opacity = 4.0;
         settings.ui_background_blur = 900;
+        settings.sxacc_base_url = "http://127.0.0.1:8787/".into();
 
         let sanitized = settings.sanitized();
         assert_eq!(sanitized.msa_client_id, MSA_DEFAULT_CLIENT_ID);
         assert!(sanitized.elyby_redirect_uri.starts_with("http://"));
+        assert_eq!(sanitized.sxacc_base_url, "http://127.0.0.1:8787");
+        let mut rejected = AppSettings::default();
+        rejected.sxacc_base_url = "ftp://nope".into();
+        assert!(rejected.sanitized().sxacc_base_url.is_empty());
         // A custom background without a file falls back to the built-in aurora.
         assert_eq!(sanitized.ui_background_kind, "aurora");
         assert_eq!(sanitized.ui_accent, "purple");

@@ -7,7 +7,7 @@
  * and the OS credential vault.
  */
 
-export type AccountProvider = "microsoft" | "ely_by" | "offline";
+export type AccountProvider = "microsoft" | "ely_by" | "offline" | "sx_acc";
 
 export type SkinModel = "classic" | "slim";
 
@@ -55,8 +55,10 @@ export interface LaunchIdentity {
   xuid: string | null;
   clientId: string | null;
   offline: boolean;
-  /** Authlib-injector endpoint (Ely.by); must be attached to the JVM args. */
+  /** Authlib-injector endpoint (Ely.by, sx.acc); must be attached to the JVM args. */
   authlibUrl: string | null;
+  /** Appended to Minecraft's version type (`release/sx.acc`). */
+  versionTypeSuffix: string | null;
 }
 
 /** Returned by `account_begin_login` to drive the browser flow. */
@@ -86,11 +88,39 @@ export interface ElyByPasswordLogin {
   password: string;
 }
 
+/** What the configured sx.acc server currently exposes. */
+export interface SxAccCapabilities {
+  configured: boolean;
+  reachable: boolean;
+  password: boolean;
+  register: boolean;
+  oauth: boolean;
+  device: boolean;
+  message: string | null;
+}
+
+/** Device-code prompt for sx.acc. `tokenUrl` is round-tripped to finish the grant. */
+export interface SxAccDevicePrompt extends DeviceCodePrompt {
+  tokenUrl: string;
+}
+
+export interface SxAccPasswordLogin {
+  email: string;
+  password: string;
+}
+
+export interface SxAccRegister {
+  email: string;
+  password: string;
+  username: string;
+}
+
 /** Human label for a provider, used in menus and badges. */
 export const PROVIDER_LABEL: Record<AccountProvider, string> = {
   microsoft: "Microsoft",
   ely_by: "Ely.by",
   offline: "Offline",
+  sx_acc: "sx.acc",
 };
 
 /** Whether a provider can be refreshed without a new sign-in. */

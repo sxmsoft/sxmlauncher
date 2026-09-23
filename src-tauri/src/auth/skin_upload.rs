@@ -124,6 +124,9 @@ pub fn provider_skin_page(provider: AccountProvider, username: &str) -> Option<S
         AccountProvider::ElyBy => Some(format!(
             "https://ely.by/u{username}/skin?username={username}"
         )),
+        // sx.acc has no fixed website. Uploads go to `{BASE}/v1/profile/skin`
+        // when that route exists; there is no host to link to otherwise.
+        AccountProvider::SxAcc => None,
         AccountProvider::Offline => None,
     }
 }

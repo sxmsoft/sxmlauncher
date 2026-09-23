@@ -172,10 +172,7 @@ impl LaunchPlanner {
         substitutions.insert("user_type", identity.user_type.as_str().to_string());
         substitutions.insert(
             "version_type",
-            version
-                .release_type
-                .clone()
-                .unwrap_or_else(|| "release".to_string()),
+            identity.version_type(version.release_type.as_deref()),
         );
         substitutions.insert("natives_directory", natives.to_string_lossy().into_owned());
         substitutions.insert("launcher_name", "SXMLAUNCHER".to_string());
@@ -429,7 +426,7 @@ impl LaunchPlanner {
         if !jar.is_file() {
             return Err(AppError::Java(format!(
                 "the authlib-injector agent is missing at {}; it is downloaded on demand \
-                 when launching with an Ely.by account",
+                 when launching with an Ely.by or sx.acc account",
                 jar.display()
             )));
         }

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { useQueryClient } from "@tanstack/react-query";
 import { Check, ExternalLink, KeyRound, ShieldCheck, UserPlus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -22,16 +23,22 @@ import {
   useCompleteLogin,
   useElyByPasswordLogin,
   useLoginOffline,
+  useSettings,
+  useSxAccCapabilities,
+  useSxAccPasswordLogin,
+  useSxAccRegister,
 } from "@/hooks/queries";
+import { qk } from "@/lib/query-client";
 import { openExternal } from "@/lib/window";
 import { accountService } from "@/services";
 import { useLoginStore } from "@/stores/login";
 import { toast } from "@/stores/ui";
+import type { AccountSummary, DeviceCodePrompt } from "@/types/account";
 
-type Tab = "microsoft" | "elyby" | "offline";
+type Tab = "microsoft" | "elyby" | "sxacc" | "offline";
 
 /**
- * Sign-in for all three providers.
+ * Sign-in for Microsoft, Ely.by, sx.acc, and offline.
  *
  * Microsoft (the public Minecraft client) and Ely.by both open the system
  * browser on the provider's own login page — never an embedded webview, which
@@ -55,6 +62,11 @@ export function LoginDialog({
   const [nickname, setNickname] = useState("");
   const [elyUsername, setElyUsername] = useState("");
   const [elyPassword, setElyPassword] = useState("");
+  const [sxEmail, setSxEmail] = useState("");
+  const [sxPassword, setSxPassword] = useState("");
+  const [sxRegEmail, setSxRegEmail] = useState("");
+  const [sxRegPassword, setSxRegPassword] = useState("");
+  const [sxUsername, setSxUsername] = useState("");
 
   // Individual selectors: the actions are stable, so the cleanup effect below
   // runs only when the dialog actually opens or closes.
@@ -67,6 +79,11 @@ export function LoginDialog({
   const complete = useCompleteLogin();
   const offline = useLoginOffline();
   const elyby = useElyByPasswordLogin();
+  const sxLogin = useSxAccPasswordLogin();
+  const sxRegister = useSxAccRegister();
+  const settings = useSettings();
+  const sxBase = settings.data?.sxaccBaseUrl?.trim() ?? "";
+  const sxCaps = useSxAccCapabilities(sxBase, open && tab === "sxacc" && sxBase.length > 0);
 
   // Closing must release the loopback listener of an unfinished attempt.
   useEffect(() => {
@@ -76,7 +93,7 @@ export function LoginDialog({
 
   const onSignedIn = () => onOpenChange(false);
 
-  const startBrowserFlow = (provider: "microsoft" | "ely_by") => {
+  const startBrowserFlow = (provider: "microsoft" | "ely_by" | "sx_acc") => {
     begin.mutate(provider, {
       onSuccess: async (info) => {
         try {
@@ -125,12 +142,15 @@ export function LoginDialog({
         </DialogHeader>
 
         <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)}>
-          <TabsList className="grid w-full grid-cols-3">
+          <TabsList className="grid w-full grid-cols-2 md:grid-cols-4">
             <TabsTrigger value="microsoft" className="justify-center">
               <ShieldCheck /> {t("login.microsoft")}
             </TabsTrigger>
             <TabsTrigger value="elyby" className="justify-center">
               <KeyRound /> {t("login.elyby")}
+            </TabsTrigger>
+            <TabsTrigger value="sxacc" className="justify-center">
+              <KeyRound /> {t("login.sxacc")}
             </TabsTrigger>
             <TabsTrigger value="offline" className="justify-center">
               <UserPlus /> {t("login.offline")}
@@ -149,7 +169,130 @@ export function LoginDialog({
             {waiting && tab === "microsoft" ? (
               <p className="text-muted-foreground text-xs">{t("login.waiting")}</p>
             ) : null}
-            <DeviceCodeSection />
+            <DeviceCodeSection onSuccess={onSignedIn} />
+          </TabsContent>
+
+          <TabsContent value="sxacc" className="flex flex-col gap-4">
+            <p className="text-muted-foreground text-xs leading-relaxed">{t("login.sxaccBody")}</p>
+            {!sxBase ? (
+              <p className="text-xs leading-relaxed text-[var(--destructive)]">{t("login.sxaccMissing")}</p>
+            ) : null}
+            {sxCaps.data?.message ? (
+              <p className="text-muted-foreground text-xs leading-relaxed">{sxCaps.data.message}</p>
+            ) : null}
+            <Button
+              variant="outline"
+              className="rounded-full"
+              disabled={!sxBase || sxCaps.data?.oauth === false}
+              onClick={() => startBrowserFlow("sx_acc")}
+              loading={complete.isPending && tab === "sxacc"}
+            >
+              <ExternalLink /> {t("login.sxaccBrowser")}
+            </Button>
+            {waiting && tab === "sxacc" ? (
+              <p className="text-muted-foreground text-xs">{t("login.waiting")}</p>
+            ) : null}
+            <Card className="flex flex-col gap-3 rounded-2xl p-4">
+              <span className="text-xs font-medium">{t("login.signIn")}</span>
+              <Field label={t("login.sxaccEmail")} htmlFor="sx-email">
+                <Input
+                  id="sx-email"
+                  value={sxEmail}
+                  onChange={(event) => setSxEmail(event.target.value)}
+                  placeholder="ada@example.com"
+                  autoComplete="username"
+                />
+              </Field>
+              <Field label={t("login.password")} htmlFor="sx-pass">
+                <Input
+                  id="sx-pass"
+                  type="password"
+                  value={sxPassword}
+                  onChange={(event) => setSxPassword(event.target.value)}
+                  autoComplete="current-password"
+                />
+              </Field>
+              <Button
+                size="sm"
+                disabled={!sxBase || !sxEmail || !sxPassword || sxCaps.data?.password === false}
+                loading={sxLogin.isPending}
+                onClick={() =>
+                  sxLogin.mutate(
+                    { email: sxEmail.trim(), password: sxPassword },
+                    { onSuccess: onSignedIn },
+                  )
+                }
+              >
+                {t("login.signIn")}
+              </Button>
+            </Card>
+            <Card className="flex flex-col gap-3 rounded-2xl p-4">
+              <span className="text-xs font-medium">{t("login.sxaccRegister")}</span>
+              <p className="text-muted-foreground text-xs leading-relaxed">{t("login.sxaccRegisterHint")}</p>
+              <Field label={t("login.sxaccEmail")} htmlFor="sx-reg-email">
+                <Input
+                  id="sx-reg-email"
+                  value={sxRegEmail}
+                  onChange={(event) => setSxRegEmail(event.target.value)}
+                  placeholder="ada@example.com"
+                  autoComplete="email"
+                />
+              </Field>
+              <Field label={t("login.sxaccUsername")} htmlFor="sx-reg-user" hint={t("login.nicknameHint")}>
+                <Input
+                  id="sx-reg-user"
+                  value={sxUsername}
+                  onChange={(event) => setSxUsername(event.target.value)}
+                  placeholder="Ada"
+                  maxLength={16}
+                  autoComplete="off"
+                />
+              </Field>
+              <Field label={t("login.password")} htmlFor="sx-reg-pass">
+                <Input
+                  id="sx-reg-pass"
+                  type="password"
+                  value={sxRegPassword}
+                  onChange={(event) => setSxRegPassword(event.target.value)}
+                  autoComplete="new-password"
+                />
+              </Field>
+              <Button
+                size="sm"
+                disabled={
+                  !sxBase ||
+                  !sxRegEmail.includes("@") ||
+                  sxRegPassword.length < 8 ||
+                  sxUsername.trim().length < 3 ||
+                  sxCaps.data?.register === false
+                }
+                loading={sxRegister.isPending}
+                onClick={() =>
+                  sxRegister.mutate(
+                    {
+                      email: sxRegEmail.trim(),
+                      password: sxRegPassword,
+                      username: sxUsername.trim(),
+                    },
+                    { onSuccess: onSignedIn },
+                  )
+                }
+              >
+                {t("login.sxaccRegister")}
+              </Button>
+            </Card>
+            {sxCaps.data?.device === false ? null : (
+              <DeviceCodeSection
+                onSuccess={onSignedIn}
+                begin={() => accountService.beginSxAccDevice()}
+                complete={(prompt) =>
+                  accountService.completeSxAccDevice({
+                    ...prompt,
+                    tokenUrl: "tokenUrl" in prompt ? String(prompt.tokenUrl) : "",
+                  })
+                }
+              />
+            )}
           </TabsContent>
 
           <TabsContent value="elyby" className="flex flex-col gap-4">
@@ -235,20 +378,29 @@ export function LoginDialog({
 }
 
 /** Device-code grant, for machines where opening a browser is not possible. */
-function DeviceCodeSection() {
+function DeviceCodeSection({
+  onSuccess,
+  begin = () => accountService.beginDeviceCode(),
+  complete = (prompt) => accountService.completeDeviceCode(prompt),
+}: {
+  onSuccess?: () => void;
+  begin?: () => Promise<DeviceCodePrompt>;
+  complete?: (prompt: DeviceCodePrompt) => Promise<AccountSummary>;
+}) {
   const deviceCode = useLoginStore((state) => state.deviceCode);
   const busy = useLoginStore((state) => state.busy);
   const setDeviceCode = useLoginStore((state) => state.setDeviceCode);
   const setError = useLoginStore((state) => state.setError);
   const setBusy = useLoginStore((state) => state.setBusy);
   const [starting, setStarting] = useState(false);
+  const client = useQueryClient();
   const { t } = useTranslation();
 
-  const begin = async () => {
+  const start = async () => {
     setStarting(true);
     setBusy(true);
     try {
-      const prompt = await accountService.beginDeviceCode();
+      const prompt = await begin();
       setDeviceCode(prompt);
       await openExternal(prompt.verificationUri);
     } catch (error) {
@@ -264,8 +416,11 @@ function DeviceCodeSection() {
     if (!deviceCode) return;
     setBusy(true);
     try {
-      const account = await accountService.completeDeviceCode(deviceCode);
+      const account = await complete(deviceCode);
+      client.setQueryData(qk.activeAccount, account);
+      void client.invalidateQueries({ queryKey: qk.accounts });
       toast.success(`Signed in as ${account.username}`);
+      onSuccess?.();
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -275,7 +430,7 @@ function DeviceCodeSection() {
 
   if (!deviceCode) {
     return (
-      <Button variant="ghost" size="sm" onClick={() => void begin()} loading={starting}>
+      <Button variant="ghost" size="sm" onClick={() => void start()} loading={starting}>
         {t("login.device")}
       </Button>
     );

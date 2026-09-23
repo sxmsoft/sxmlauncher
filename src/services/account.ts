@@ -1,5 +1,5 @@
 /**
- * Account service — the three signing-in providers.
+ * Account service — Microsoft, Ely.by, sx.acc, and offline.
  *
  * Tokens never cross this boundary: `begin_login` hands back a URL to open and
  * a `loginId` to complete with, and every account object the UI sees is a
@@ -15,6 +15,8 @@ import type {
   PendingLoginInfo,
   SkinModel,
   SkinUploadOutcome,
+  SxAccCapabilities,
+  SxAccDevicePrompt,
 } from "@/types/account";
 
 export const accountService = {
@@ -28,7 +30,7 @@ export const accountService = {
   loginOffline: (username: string) =>
     call<AccountSummary>("account_login_offline", { username }),
 
-  /** Start the OAuth2 + PKCE browser flow (Microsoft or Ely.by). */
+  /** Start the OAuth2 + PKCE browser flow (Microsoft, Ely.by, or sx.acc). */
   beginLogin: (provider: AccountProvider) =>
     call<PendingLoginInfo>("account_begin_login", { provider }),
 
@@ -43,6 +45,22 @@ export const accountService = {
   /** Ely.by's Authlib endpoint accepts a direct username/password pair. */
   loginElybyPassword: (username: string, password: string) =>
     call<AccountSummary>("account_login_elyby_password", { username, password }),
+
+  /** sx.acc `{BASE}/v1/login`. The identifier is an email, or a username when it has no `@`. */
+  loginSxAccPassword: (email: string, password: string) =>
+    call<AccountSummary>("account_login_sxacc_password", { email, password }),
+
+  /** sx.acc `{BASE}/v1/register`, then a session when the server does not return one. */
+  registerSxAcc: (email: string, password: string, username: string) =>
+    call<AccountSummary>("account_register_sxacc", { email, password, username }),
+
+  /** Discovery for the configured sx.acc origin. */
+  sxaccCapabilities: () => call<SxAccCapabilities>("account_sxacc_capabilities"),
+
+  beginSxAccDevice: () => call<SxAccDevicePrompt>("account_begin_sxacc_device"),
+
+  completeSxAccDevice: (prompt: SxAccDevicePrompt) =>
+    call<AccountSummary>("account_complete_sxacc_device", { prompt }),
 
   /** Device-code grant, for machines where opening a browser is not possible. */
   beginDeviceCode: () => call<DeviceCodePrompt>("account_begin_device_code"),

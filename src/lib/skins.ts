@@ -94,7 +94,7 @@ export function bodyUrlFallback(account: AccountSummary, size = 320): string {
 /** Applied cape, when the account has one from a signed-in provider. */
 export function capeUrl(account: AccountSummary): string | null {
   if (account.skin.capeUrl) return account.skin.capeUrl;
-  if (account.provider === "offline" || account.provider === "ely_by") return null;
+  if (account.provider === "offline" || account.provider === "ely_by" || account.provider === "sx_acc") return null;
   return `${MC_HEADS}/capes/${identifierFor(account)}`;
 }
 

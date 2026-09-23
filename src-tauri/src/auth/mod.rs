@@ -1,4 +1,4 @@
-//! Account management: three providers behind one interface.
+//! Account management: Microsoft, Ely.by, sx.acc, and offline behind one interface.
 //!
 //! Design invariants
 //! * The **frontend never sees a token**. It sees [`AccountSummary`]s; the
@@ -30,6 +30,7 @@ pub mod msa;
 pub mod oauth;
 pub mod offline;
 pub mod skin_upload;
+pub mod sxacc;
 pub mod vault;
 
 pub use elyby::{
@@ -100,7 +101,9 @@ pub fn deliver_oauth_callback(raw: &str) {
     let Ok(url) = url::Url::parse(raw.trim()) else {
         return;
     };
-    if !url.scheme().eq_ignore_ascii_case(MSA_LEGACY_SCHEME) {
+    if !url.scheme().eq_ignore_ascii_case(MSA_LEGACY_SCHEME)
+        && !url.scheme().eq_ignore_ascii_case(sxacc::SXACC_SCHEME)
+    {
         return;
     }
     let state = url
@@ -120,7 +123,7 @@ pub fn deliver_oauth_callback(raw: &str) {
             "authorization denied by provider: {error}"
         ))),
         Ok(CallbackQuery::Incomplete) => Err(AppError::Account(
-            "the Microsoft callback was missing its authorization code".to_string(),
+            "the sign-in callback was missing its authorization code".to_string(),
         )),
         Err(err) => Err(err),
     });
@@ -135,43 +138,50 @@ fn register_protocol_waiter(state: String) -> ProtocolInbox {
     }
 }
 
+async fn await_protocol_code(
+    inbox: ProtocolInbox,
+    expected: &str,
+    redirect_uri: &str,
+) -> AppResult<String> {
+    let rx = inbox.rx.lock().take().ok_or_else(|| {
+        AppError::Account("the sign-in callback was already consumed".to_string())
+    })?;
+    let callback = tokio::time::timeout(oauth::CALLBACK_TIMEOUT, rx)
+        .await
+        .map_err(|_| {
+            let extra = if redirect_uri.starts_with("ms-xal") {
+                " If the official Minecraft launcher is also installed it may have \
+                 claimed the ms-xal callback; use the device-code sign-in instead."
+            } else {
+                ""
+            };
+            AppError::Account(format!(
+                "timed out waiting for the sign-in to return to SXMLAUNCHER.{extra}"
+            ))
+        })?
+        .map_err(|_| {
+            AppError::Account("the sign-in was cancelled before it finished".to_string())
+        })??;
+    if callback.state != expected {
+        return Err(AppError::Account(
+            "OAuth state mismatch; the callback did not match this sign-in attempt".to_string(),
+        ));
+    }
+    Ok(callback.code)
+}
+
 impl PendingLogin {
     /// Wait for the browser redirect and return the authorization code.
     async fn wait_for_code(self) -> AppResult<String> {
         let expected = self.state.clone();
+        let redirect_uri = self.redirect_uri.clone();
         match self.source {
             CallbackSource::Loopback(server) => {
                 let callback = server.wait_for_code(&expected).await?;
                 Ok(callback.code)
             }
             CallbackSource::Protocol(inbox) => {
-                let rx = inbox.rx.lock().take().ok_or_else(|| {
-                    AppError::Account(
-                        "the Microsoft sign-in callback was already consumed".to_string(),
-                    )
-                })?;
-                let callback = tokio::time::timeout(oauth::CALLBACK_TIMEOUT, rx)
-                    .await
-                    .map_err(|_| {
-                        AppError::Account(
-                            "timed out waiting for Microsoft to return to SXMLAUNCHER. If the \
-                             official Minecraft launcher is also installed it may have claimed \
-                             the ms-xal callback; use the device-code sign-in instead."
-                                .to_string(),
-                        )
-                    })?
-                    .map_err(|_| {
-                        AppError::Account(
-                            "the Microsoft sign-in was cancelled before it finished".to_string(),
-                        )
-                    })??;
-                if callback.state != expected {
-                    return Err(AppError::Account(
-                        "OAuth state mismatch; the callback did not match this sign-in attempt"
-                            .to_string(),
-                    ));
-                }
-                Ok(callback.code)
+                await_protocol_code(inbox, &expected, &redirect_uri).await
             }
             CallbackSource::ElyDevice(_) => Err(AppError::Account(
                 "this Ely.by sign-in does not use an authorization code".to_string(),
@@ -206,6 +216,8 @@ pub struct ProviderConfig {
     pub elyby_client_secret: Option<String>,
     /// Exact redirect URI registered with Ely.by.
     pub elyby_redirect_uri: String,
+    /// sx.acc origin. Empty until the user sets `SXACC_BASE_URL` or Settings.
+    pub sxacc_base_url: String,
 }
 
 impl Default for ProviderConfig {
@@ -215,6 +227,7 @@ impl Default for ProviderConfig {
             elyby_client_id: crate::config::ELYBY_DEFAULT_CLIENT_ID.to_string(),
             elyby_client_secret: None,
             elyby_redirect_uri: crate::config::AppSettings::default().elyby_redirect_uri,
+            sxacc_base_url: String::new(),
         }
     }
 }
@@ -226,6 +239,7 @@ impl From<&crate::config::AppSettings> for ProviderConfig {
             elyby_client_id: settings.elyby_client_id.clone(),
             elyby_client_secret: settings.elyby_client_secret.clone(),
             elyby_redirect_uri: settings.elyby_redirect_uri.clone(),
+            sxacc_base_url: settings.sxacc_base_url.clone(),
         }
     }
 }
@@ -249,6 +263,7 @@ pub struct AccountManager {
     vault: Arc<dyn CredentialVault>,
     msa: MicrosoftAuth,
     elyby: ElyByAuth,
+    sxacc: sxacc::SxAccAuth,
     /// Exact redirect URI registered with Ely.by.
     elyby_redirect_uri: String,
     active: Mutex<Option<Uuid>>,
@@ -281,10 +296,13 @@ impl AccountManager {
             // secret. Substituting it makes every token exchange fail with
             // `invalid_client`. A missing secret stays missing.
             elyby: match config.elyby_client_secret.filter(|secret| !secret.trim().is_empty()) {
-                Some(secret) => ElyByAuth::with_secret(http, config.elyby_client_id, secret),
-                None => ElyByAuth::new(http, config.elyby_client_id),
+                Some(secret) => {
+                    ElyByAuth::with_secret(http.clone(), config.elyby_client_id, secret)
+                }
+                None => ElyByAuth::new(http.clone(), config.elyby_client_id),
             },
             elyby_redirect_uri: config.elyby_redirect_uri,
+            sxacc: sxacc::SxAccAuth::new(http, &config.sxacc_base_url),
             active: Mutex::new(None),
             refreshes: DashMap::new(),
         }
@@ -544,6 +562,108 @@ impl AccountManager {
         .await
     }
 
+    /// Flows the configured sx.acc server currently advertises.
+    pub async fn sxacc_capabilities(&self) -> sxacc::SxAccCapabilities {
+        self.sxacc.capabilities().await
+    }
+
+    /// Browser sign-in for sx.acc: authorization code + PKCE, returning through
+    /// `sxmlauncher://auth/callback`.
+    pub async fn begin_sxacc_login(&self) -> AppResult<PendingLogin> {
+        let pkce = PkceCode::generate()?;
+        let state = oauth::random_state();
+        let authorize_url = self.sxacc.begin_oauth(&pkce.challenge, &state).await?;
+        Ok(PendingLogin {
+            login_id: Uuid::new_v4(),
+            provider: AccountProvider::SxAcc,
+            authorize_url,
+            redirect_uri: sxacc::SXACC_REDIRECT_URI.to_string(),
+            verifier: pkce.verifier,
+            state: state.clone(),
+            source: CallbackSource::Protocol(register_protocol_waiter(state)),
+        })
+    }
+
+    /// Finish an sx.acc browser sign-in started by [`Self::begin_sxacc_login`].
+    pub async fn complete_sxacc_login(&self, pending: PendingLogin) -> AppResult<AccountSummary> {
+        let PendingLogin {
+            verifier,
+            state,
+            redirect_uri,
+            source,
+            ..
+        } = pending;
+        let session = match source {
+            CallbackSource::Protocol(inbox) => {
+                let code = await_protocol_code(inbox, &state, &redirect_uri).await?;
+                self.sxacc.exchange_code(&code, &verifier).await?
+            }
+            CallbackSource::Loopback(_) | CallbackSource::ElyDevice(_) => {
+                return Err(AppError::Account(
+                    "this sx.acc sign-in does not use that callback".into(),
+                ))
+            }
+        };
+        self.finalize_sxacc(session).await
+    }
+
+    /// Device-code sign-in, for machines where the custom protocol cannot return.
+    pub async fn begin_sxacc_device(&self) -> AppResult<sxacc::SxAccDevicePrompt> {
+        let (prompt, _) = self.sxacc.begin_device().await?;
+        Ok(prompt)
+    }
+
+    pub async fn complete_sxacc_device(
+        &self,
+        prompt: &sxacc::SxAccDevicePrompt,
+    ) -> AppResult<AccountSummary> {
+        if prompt.token_url.trim().is_empty() {
+            return Err(AppError::Account(
+                "this sx.acc device sign-in is missing its token endpoint".into(),
+            ));
+        }
+        let grant = sxacc::SxAccDeviceGrant {
+            device_code: prompt.device_code.clone(),
+            interval_secs: prompt.interval.max(1),
+            expires_at: Utc::now() + chrono::Duration::seconds(prompt.expires_in.max(30)),
+            token_url: prompt.token_url.clone(),
+        };
+        self.finalize_sxacc(self.sxacc.poll_device(&grant).await?)
+            .await
+    }
+
+    /// Email (or username) and password against `{BASE}/v1/login`.
+    pub async fn login_sxacc_password(
+        &self,
+        identifier: &str,
+        password: &str,
+    ) -> AppResult<AccountSummary> {
+        self.finalize_sxacc(self.sxacc.login_password(identifier, password).await?)
+            .await
+    }
+
+    /// Create an sx.acc account from the launcher, then sign in with it.
+    pub async fn register_sxacc(
+        &self,
+        email: &str,
+        password: &str,
+        username: &str,
+    ) -> AppResult<AccountSummary> {
+        self.finalize_sxacc(self.sxacc.register(email, password, username).await?)
+            .await
+    }
+
+    async fn finalize_sxacc(&self, session: sxacc::SxAccSession) -> AppResult<AccountSummary> {
+        self.finalize_login(LoginOutcome {
+            provider: AccountProvider::SxAcc,
+            username: session.username,
+            uuid: session.uuid,
+            skin: session.skin,
+            tokens: Some(session.tokens),
+        })
+        .await
+    }
+
     /// Persist a completed sign-in and make the account active.
     async fn finalize_login(&self, outcome: LoginOutcome) -> AppResult<AccountSummary> {
         // Reuse the existing row id when this identity already signed in before,
@@ -605,6 +725,7 @@ impl AccountManager {
                 client_id: tokens.client_id.clone(),
                 offline: false,
                 authlib_url: None,
+                version_type_suffix: None,
             },
             AccountProvider::ElyBy => LaunchIdentity {
                 username: account.username.clone(),
@@ -617,6 +738,18 @@ impl AccountManager {
                 // Without the injector the client would authenticate against
                 // Mojang and fail with a session error.
                 authlib_url: Some(elyby::AUTHLIB_INJECTOR_URL.to_string()),
+                version_type_suffix: None,
+            },
+            AccountProvider::SxAcc => LaunchIdentity {
+                username: account.username.clone(),
+                uuid: account.uuid_undashed(),
+                access_token: tokens.access_token.clone(),
+                user_type: UserType::Mojang,
+                xuid: None,
+                client_id: None,
+                offline: false,
+                authlib_url: Some(self.sxacc.authlib_url()?),
+                version_type_suffix: Some(sxacc::SXACC_VERSION_LABEL.to_string()),
             },
             AccountProvider::Offline => offline_identity(&account.username),
         })
@@ -749,6 +882,21 @@ impl AccountManager {
                 }
                 Ok(self.elyby.tokens_from_oauth(&tokens))
             }
+            AccountProvider::SxAcc => {
+                let refresh_token = stored
+                    .refresh_token
+                    .as_deref()
+                    .ok_or(AppError::Unauthorized)?;
+                let session = self.sxacc.refresh(refresh_token).await?;
+                if session.username != account.username || session.uuid != account.uuid {
+                    let mut renamed = account.clone();
+                    renamed.username = session.username.clone();
+                    renamed.uuid = session.uuid;
+                    renamed.skin = session.skin.clone();
+                    self.db.upsert_account(&renamed)?;
+                }
+                Ok(session.tokens)
+            }
             AccountProvider::Offline => Ok(stored.clone()),
         }
     }
@@ -776,6 +924,14 @@ impl AccountManager {
                         .invalidate(&stored.access_token, client_token)
                         .await;
                 }
+            }
+        }
+        if account.provider == AccountProvider::SxAcc {
+            if let Some(stored) = self.vault.load(&key).await? {
+                let _ = self
+                    .sxacc
+                    .logout(&stored.access_token, stored.refresh_token.as_deref())
+                    .await;
             }
         }
 
@@ -818,6 +974,10 @@ impl AccountManager {
                 msa::fetch_skin_from_session_server(&self.http_for_skins(), account.uuid).await?
             }
             AccountProvider::ElyBy => self.elyby.fetch_textures(account.uuid).await?,
+            AccountProvider::SxAcc => {
+                let tokens = self.ensure_tokens(&account).await?;
+                self.sxacc.fetch_profile(&tokens.access_token).await?.skin
+            }
             AccountProvider::Offline => return Ok(account.skin),
         };
 
@@ -868,6 +1028,36 @@ impl AccountManager {
                     }),
                     url: link,
                 })
+            }
+            AccountProvider::SxAcc => {
+                let tokens = self.ensure_tokens(&account).await?;
+                match self
+                    .sxacc
+                    .upload_skin(&tokens.access_token, model, png)
+                    .await?
+                {
+                    Some(skin) => {
+                        let mut updated = account;
+                        updated.skin = skin.clone();
+                        self.db.upsert_account(&updated)?;
+                        Ok(skin_upload::SkinUploadOutcome {
+                            uploaded: true,
+                            skin,
+                            message: None,
+                            url: None,
+                        })
+                    }
+                    None => Ok(skin_upload::SkinUploadOutcome {
+                        uploaded: false,
+                        skin: account.skin.clone(),
+                        message: Some(
+                            "This sx.acc server does not accept skin uploads from the launcher. \
+                             The PNG passed the local checks."
+                                .into(),
+                        ),
+                        url: None,
+                    }),
+                }
             }
             AccountProvider::Microsoft => {
                 // The upload needs the *Minecraft* token; ensure_tokens runs

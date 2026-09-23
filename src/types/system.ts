@@ -29,6 +29,8 @@ export interface AppSettings {
   elybyClientId: string;
   elybyClientSecret: string | null;
   elybyRedirectUri: string;
+  /** sx.acc origin. Empty until the user sets it. `SXACC_BASE_URL` overrides it. */
+  sxaccBaseUrl: string;
 
   // --- p2p / hosting ---------------------------------------------------
   redisUrl: string;

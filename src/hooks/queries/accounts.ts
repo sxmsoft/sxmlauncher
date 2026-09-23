@@ -1,4 +1,4 @@
-/** Account queries and the sign-in mutations for all three providers. */
+/** Account queries and the sign-in mutations for every provider. */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -61,6 +61,42 @@ export function useElyByPasswordLogin() {
       accountService.loginElybyPassword(username, password),
     onSuccess: write,
     onError: (error) => toast.error(error, "Ely.by sign-in failed"),
+  });
+}
+
+export function useSxAccPasswordLogin() {
+  const write = useAccountCacheWriter();
+  return useMutation({
+    mutationFn: ({ email, password }: { email: string; password: string }) =>
+      accountService.loginSxAccPassword(email, password),
+    onSuccess: write,
+    onError: (error) => toast.error(error, "sx.acc sign-in failed"),
+  });
+}
+
+export function useSxAccRegister() {
+  const write = useAccountCacheWriter();
+  return useMutation({
+    mutationFn: ({
+      email,
+      password,
+      username,
+    }: {
+      email: string;
+      password: string;
+      username: string;
+    }) => accountService.registerSxAcc(email, password, username),
+    onSuccess: write,
+    onError: (error) => toast.error(error, "Could not create the sx.acc account"),
+  });
+}
+
+export function useSxAccCapabilities(baseUrl: string, enabled: boolean) {
+  return useQuery({
+    queryKey: [...qk.accounts, "sxacc", baseUrl],
+    queryFn: accountService.sxaccCapabilities,
+    enabled,
+    staleTime: 15_000,
   });
 }
 
