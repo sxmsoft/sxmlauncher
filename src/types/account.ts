@@ -105,7 +105,8 @@ export interface SxAccDevicePrompt extends DeviceCodePrompt {
 }
 
 export interface SxAccPasswordLogin {
-  email: string;
+  /** Minecraft username, 3–16 characters. Live sx.acc rejects a longer email here. */
+  username: string;
   password: string;
 }
 

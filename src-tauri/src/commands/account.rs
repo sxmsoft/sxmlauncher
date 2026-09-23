@@ -112,14 +112,14 @@ pub async fn account_login_elyby_password(
     state.accounts().login_elyby_password(&username, &password).await
 }
 
-/// sx.acc email (or username) and password.
+/// sx.acc username (max 16) and password. Live route: `POST {BASE}/v1/auth/login`.
 #[tauri::command]
 pub async fn account_login_sxacc_password(
-    email: String,
+    username: String,
     password: String,
     state: State<'_, AppState>,
 ) -> AppResult<AccountSummary> {
-    state.accounts().login_sxacc_password(&email, &password).await
+    state.accounts().login_sxacc_password(&username, &password).await
 }
 
 /// Create an sx.acc account on the configured server and sign in with it.

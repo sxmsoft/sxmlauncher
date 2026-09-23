@@ -67,8 +67,8 @@ export function useElyByPasswordLogin() {
 export function useSxAccPasswordLogin() {
   const write = useAccountCacheWriter();
   return useMutation({
-    mutationFn: ({ email, password }: { email: string; password: string }) =>
-      accountService.loginSxAccPassword(email, password),
+    mutationFn: ({ username, password }: { username: string; password: string }) =>
+      accountService.loginSxAccPassword(username, password),
     onSuccess: write,
     onError: (error) => toast.error(error, "sx.acc sign-in failed"),
   });

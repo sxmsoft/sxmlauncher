@@ -46,11 +46,11 @@ export const accountService = {
   loginElybyPassword: (username: string, password: string) =>
     call<AccountSummary>("account_login_elyby_password", { username, password }),
 
-  /** sx.acc `{BASE}/v1/login`. The identifier is an email, or a username when it has no `@`. */
-  loginSxAccPassword: (email: string, password: string) =>
-    call<AccountSummary>("account_login_sxacc_password", { email, password }),
+  /** sx.acc `POST {BASE}/v1/auth/login`. `username` is the in-game name, at most 16 characters. */
+  loginSxAccPassword: (username: string, password: string) =>
+    call<AccountSummary>("account_login_sxacc_password", { username, password }),
 
-  /** sx.acc `{BASE}/v1/register`, then a session when the server does not return one. */
+  /** sx.acc `POST {BASE}/v1/auth/register`. A 201 with tokens is the session. */
   registerSxAcc: (email: string, password: string, username: string) =>
     call<AccountSummary>("account_register_sxacc", { email, password, username }),
 

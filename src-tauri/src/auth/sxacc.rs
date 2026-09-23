@@ -101,9 +101,9 @@ struct Endpoints {
 impl Endpoints {
     fn standard(base: &str) -> Self {
         Self {
-            register: format!("{base}/v1/register"),
-            login: format!("{base}/v1/login"),
-            refresh: format!("{base}/v1/refresh"),
+            register: format!("{base}/v1/auth/register"),
+            login: format!("{base}/v1/auth/login"),
+            refresh: format!("{base}/v1/auth/refresh"),
             profile: format!("{base}/v1/profile"),
             skin: format!("{base}/v1/profile/skin"),
             logout: format!("{base}/v1/logout"),
@@ -203,20 +203,24 @@ impl SxAccAuth {
         }
     }
 
-    pub async fn login_password(&self, identifier: &str, password: &str) -> AppResult<SxAccSession> {
+    pub async fn login_password(&self, username: &str, password: &str) -> AppResult<SxAccSession> {
+        // Live sx.acc v2 accepts `username` only, and rejects anything longer
+        // than 16 characters. Validate before discovery so an email is never
+        // sent as that field.
+        let username = username.trim();
+        crate::auth::offline::validate_username(username)?;
+        if password.is_empty() {
+            return Err(AppError::Account(
+                "sx.acc sign-in needs a username and a password".into(),
+            ));
+        }
         let endpoints = self.discover().await?;
         if !endpoints.password {
             return Err(AppError::Account(
-                "this sx.acc server does not expose email/password sign-in".into(),
+                "this sx.acc server does not expose password sign-in".into(),
             ));
         }
-        let identifier = identifier.trim();
-        if identifier.is_empty() || password.is_empty() {
-            return Err(AppError::Account(
-                "sx.acc sign-in needs an email (or username) and a password".into(),
-            ));
-        }
-        self.login_with(&endpoints, identifier, password).await
+        self.login_with(&endpoints, username, password).await
     }
 
     pub async fn register(
@@ -233,7 +237,9 @@ impl SxAccAuth {
         }
         let email = email.trim();
         let username = username.trim();
-        validate_email(email)?;
+        if !email.is_empty() {
+            validate_email(email)?;
+        }
         crate::auth::offline::validate_username(username)?;
         if password.chars().count() < 8 {
             return Err(AppError::Account(
@@ -241,23 +247,21 @@ impl SxAccAuth {
             ));
         }
 
+        let mut body = serde_json::Map::new();
+        body.insert("username".into(), json!(username));
+        body.insert("password".into(), json!(password));
+        if !email.is_empty() {
+            body.insert("email".into(), json!(email));
+        }
         let created = self
-            .post_json(
-                &endpoints.register,
-                &json!({
-                    "email": email,
-                    "username": username,
-                    "password": password,
-                    "clientId": SXACC_OAUTH_CLIENT_ID,
-                }),
-            )
+            .post_json(&endpoints.register, &Value::Object(body))
             .await?;
 
         if find_string(&created, &["accessToken", "access_token", "token"]).is_some() {
             return self.finish_session(&endpoints, created).await;
         }
-        // v1 servers may create the account without starting a session.
-        self.login_with(&endpoints, email, password).await
+        // Older servers may create the account without starting a session.
+        self.login_with(&endpoints, username, password).await
     }
 
     pub async fn refresh(&self, refresh_token: &str) -> AppResult<SxAccSession> {
@@ -267,7 +271,7 @@ impl SxAccAuth {
             return Err(AppError::Unauthorized);
         }
 
-        let json_body = json!({ "refreshToken": refresh_token, "clientId": SXACC_OAUTH_CLIENT_ID });
+        let json_body = json!({ "refresh_token": refresh_token });
         let refreshed = match self.post_json(&endpoints.refresh, &json_body).await {
             Ok(value) => value,
             Err(AppError::Account(message)) if message_is_missing_route(&message) => {
@@ -469,17 +473,16 @@ impl SxAccAuth {
         png: Vec<u8>,
     ) -> AppResult<Option<SkinProfile>> {
         let endpoints = self.discover().await?;
+        let _ = model;
         let part = reqwest::multipart::Part::bytes(png)
             .file_name("skin.png")
             .mime_str("image/png")
             .map_err(|err| AppError::Account(format!("could not build the skin upload: {err}")))?;
-        let form = reqwest::multipart::Form::new()
-            .text("model", model.as_str())
-            .text("variant", model.as_str())
-            .part("file", part);
+        // Live sx.acc v2 accepts a single multipart field named `file` on PUT.
+        let form = reqwest::multipart::Form::new().part("file", part);
         let response = self
             .http
-            .post(&endpoints.skin)
+            .put(&endpoints.skin)
             .bearer_auth(access_token)
             .multipart(form)
             .send()
@@ -521,18 +524,11 @@ impl SxAccAuth {
         identifier: &str,
         password: &str,
     ) -> AppResult<SxAccSession> {
-        let mut body = serde_json::Map::new();
-        body.insert("password".into(), json!(password));
-        body.insert("login".into(), json!(identifier));
-        body.insert("clientId".into(), json!(SXACC_OAUTH_CLIENT_ID));
-        if identifier.contains('@') {
-            body.insert("email".into(), json!(identifier));
-        } else {
-            body.insert("username".into(), json!(identifier));
-        }
-        let value = self
-            .post_json(&endpoints.login, &Value::Object(body))
-            .await?;
+        let body = json!({
+            "username": identifier,
+            "password": password,
+        });
+        let value = self.post_json(&endpoints.login, &body).await?;
         self.finish_session(endpoints, value).await
     }
 
@@ -1249,6 +1245,22 @@ mod tests {
     }
 
     #[test]
+    fn standard_routes_match_live_sxacc_v2() {
+        let endpoints = Endpoints::standard("https://sx-acc.vercel.app");
+        assert_eq!(
+            endpoints.register,
+            "https://sx-acc.vercel.app/v1/auth/register"
+        );
+        assert_eq!(endpoints.login, "https://sx-acc.vercel.app/v1/auth/login");
+        assert_eq!(
+            endpoints.refresh,
+            "https://sx-acc.vercel.app/v1/auth/refresh"
+        );
+        assert_eq!(endpoints.profile, "https://sx-acc.vercel.app/v1/profile");
+        assert_eq!(endpoints.skin, "https://sx-acc.vercel.app/v1/profile/skin");
+    }
+
+    #[test]
     fn authorize_url_is_the_public_client_with_pkce() {
         let endpoints = Endpoints::standard("http://127.0.0.1:9");
         let url = endpoints.authorize_url("chal", "st").unwrap();
@@ -1266,7 +1278,7 @@ mod tests {
     fn discovery_can_turn_flows_off_and_move_paths() {
         let doc = json!({
             "flows": ["password", "register"],
-            "endpoints": { "login": "/v1/auth/login" },
+            "endpoints": { "login": "/v1/custom/login" },
             "oauth": { "authorizationEndpoint": "https://accounts.example/oauth/authorize" }
         });
         let endpoints = Endpoints::from_discovery("https://accounts.example", &doc);
@@ -1274,7 +1286,7 @@ mod tests {
         assert!(endpoints.register_enabled);
         assert!(!endpoints.oauth);
         assert!(!endpoints.device_enabled);
-        assert_eq!(endpoints.login, "https://accounts.example/v1/auth/login");
+        assert_eq!(endpoints.login, "https://accounts.example/v1/custom/login");
         assert_eq!(
             endpoints.authorize,
             "https://accounts.example/oauth/authorize"
@@ -1315,6 +1327,34 @@ mod tests {
             Some("http://127.0.0.1:8787/textures/steve.png")
         );
         assert_eq!(session.skin.model, SkinModel::Slim);
+    }
+
+    #[test]
+    fn session_parser_accepts_the_live_v2_profile_document() {
+        let value = json!({
+            "access_token": "acc",
+            "refresh_token": "ref",
+            "token_type": "Bearer",
+            "expires_in": 900,
+            "profile": {
+                "id": "9130a0bb-1e4f-421b-b1f3-b6023c513f30",
+                "uuid": "9130a0bb1e4f421bb1f3b6023c513f30",
+                "username": "Newbie",
+                "email": "new@example.com",
+                "skinModel": "steve",
+                "skinUrl": null
+            }
+        });
+        let session = parse_session("https://sx-acc.vercel.app", &value).unwrap();
+        assert_eq!(session.username, "Newbie");
+        assert_eq!(session.tokens.access_token, "acc");
+        assert_eq!(session.tokens.refresh_token.as_deref(), Some("ref"));
+        assert_eq!(
+            session.uuid.to_string(),
+            "9130a0bb-1e4f-421b-b1f3-b6023c513f30"
+        );
+        assert!(session.skin.skin_url.is_none());
+        assert_eq!(session.skin.model, SkinModel::Classic);
     }
 
     #[test]
@@ -1362,7 +1402,7 @@ mod tests {
         let base = spawn_v1(hits.clone()).await;
         let auth = SxAccAuth::new(test_http(), &base);
 
-        let session = auth.login_password("ada@example.com", "correct-horse").await.unwrap();
+        let session = auth.login_password("Ada", "correct-horse").await.unwrap();
         assert_eq!(session.username, "Ada");
         assert_eq!(
             session.skin.skin_url.as_deref(),
@@ -1370,19 +1410,50 @@ mod tests {
         );
         assert_eq!(auth.authlib_url().unwrap(), format!("{base}/authlib/"));
 
+        let rejected = auth
+            .login_password("ada@example.com", "correct-horse")
+            .await
+            .unwrap_err();
+        assert!(
+            rejected.to_string().contains("16")
+                || rejected.to_string().contains("underscores"),
+            "{rejected}"
+        );
+
         let created = auth
             .register("new@example.com", "long-enough", "Newbie")
             .await
             .unwrap();
         assert_eq!(created.username, "Newbie");
 
+        let png = vec![0x89, 0x50, 0x4e, 0x47];
+        auth.upload_skin("acc-token", SkinModel::Classic, png)
+            .await
+            .unwrap()
+            .expect("skin upload");
+
         let recorded = hits.lock().await.clone();
-        assert!(recorded.iter().any(|(path, body)| {
-            path == "/v1/login" && body.contains("ada@example.com") && body.contains("password")
+        assert!(recorded.iter().any(|(method, path, body)| {
+            method == "POST"
+                && path == "/v1/auth/login"
+                && body.contains("\"username\":\"Ada\"")
+                && body.contains("password")
+                && !body.contains("\"login\"")
+                && !body.contains("ada@example.com")
         }));
-        assert!(recorded
+        assert!(recorded.iter().any(|(method, path, body)| {
+            method == "POST"
+                && path == "/v1/auth/register"
+                && body.contains("\"username\":\"Newbie\"")
+                && body.contains("new@example.com")
+                && !body.contains("clientId")
+        }));
+        assert!(recorded.iter().any(|(method, path, body)| {
+            method == "PUT" && path == "/v1/profile/skin" && body.contains("name=\"file\"")
+        }));
+        assert!(!recorded
             .iter()
-            .any(|(path, body)| path == "/v1/register" && body.contains("Newbie")));
+            .any(|(_, path, _)| path == "/v1/login" || path == "/v1/register"));
     }
 
     #[tokio::test]
@@ -1428,13 +1499,13 @@ mod tests {
         let recorded = hits.lock().await.clone();
         let token = recorded
             .iter()
-            .find(|(path, _)| path == "/v1/oauth/token")
+            .find(|(_, path, _)| path == "/v1/oauth/token")
             .expect("token exchange");
-        assert!(token.1.contains("client_id=sxmlauncher"));
-        assert!(token.1.contains("code_verifier="));
-        assert!(token.1.contains("code=auth-code"));
-        assert!(token.1.contains("sxmlauncher"));
-        assert!(!token.1.contains("client_secret"));
+        assert!(token.2.contains("client_id=sxmlauncher"));
+        assert!(token.2.contains("code_verifier="));
+        assert!(token.2.contains("code=auth-code"));
+        assert!(token.2.contains("sxmlauncher"));
+        assert!(!token.2.contains("client_secret"));
     }
 
     fn test_http() -> reqwest::Client {
@@ -1444,7 +1515,7 @@ mod tests {
             .unwrap()
     }
 
-    async fn spawn_v1(hits: Arc<Mutex<Vec<(String, String)>>>) -> String {
+    async fn spawn_v1(hits: Arc<Mutex<Vec<(String, String, String)>>>) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
@@ -1454,9 +1525,19 @@ mod tests {
                 };
                 let hits = hits.clone();
                 tokio::spawn(async move {
-                    let mut buf = vec![0u8; 16 * 1024];
-                    let n = socket.read(&mut buf).await.unwrap_or(0);
-                    let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let mut buf = Vec::new();
+                    let mut tmp = [0u8; 4096];
+                    loop {
+                        let n = socket.read(&mut tmp).await.unwrap_or(0);
+                        if n == 0 {
+                            break;
+                        }
+                        buf.extend_from_slice(&tmp[..n]);
+                        if request_is_complete(&buf) || buf.len() > 64 * 1024 {
+                            break;
+                        }
+                    }
+                    let req = String::from_utf8_lossy(&buf).to_string();
                     let request_line = req.lines().next().unwrap_or("");
                     let mut parts = request_line.split_whitespace();
                     let method = parts.next().unwrap_or("");
@@ -1467,10 +1548,12 @@ mod tests {
                         .next()
                         .unwrap_or("/");
                     let body = req.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
-                    hits.lock().await.push((path.to_string(), body.clone()));
-                    let (status, payload) = route(method, path, &body);
+                    hits.lock()
+                        .await
+                        .push((method.to_string(), path.to_string(), body.clone()));
+                    let (status, content_type, payload) = route(method, path, &body);
                     let response = format!(
-                        "HTTP/1.1 {status} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                        "HTTP/1.1 {status} {}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
                         reason(status),
                         payload.len()
                     );
@@ -1482,36 +1565,56 @@ mod tests {
         format!("http://127.0.0.1:{port}")
     }
 
-    fn route(method: &str, path: &str, body: &str) -> (u16, String) {
+    fn route(method: &str, path: &str, _body: &str) -> (u16, &'static str, String) {
         let player = |name: &str| {
             json!({
-                "accessToken": "acc-token",
-                "refreshToken": "ref-token",
-                "expiresIn": 3600,
-                "username": name,
-                "uuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-                "skinUrl": "https://textures.example/ada.png",
-                "skinModel": "classic"
+                "access_token": "acc-token",
+                "refresh_token": "ref-token",
+                "token_type": "Bearer",
+                "expires_in": 900,
+                "profile": {
+                    "id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                    "uuid": "aaaaaaaabbbbccccddddeeeeeeeeeeee",
+                    "username": name,
+                    "skinModel": "steve",
+                    "skinUrl": "https://textures.example/ada.png"
+                }
             })
             .to_string()
         };
         match (method, path) {
-            ("GET", "/v1") => (404, "{}".into()),
-            ("POST", "/v1/login") => {
-                if body.contains("new@example.com") {
-                    (200, player("Newbie"))
-                } else {
-                    (200, player("Ada"))
-                }
-            }
-            ("POST", "/v1/register") => (
-                201,
-                json!({ "username": "Newbie", "email": "new@example.com" }).to_string(),
+            // Live sx.acc answers GET /v1 with the website, not a discovery document.
+            ("GET", "/v1") => (200, "text/html", "<!doctype html><title>sx.acc</title>".into()),
+            ("POST", "/v1/auth/login") => (200, "application/json", player("Ada")),
+            ("POST", "/v1/auth/register") => (201, "application/json", player("Newbie")),
+            ("POST", "/v1/oauth/token") => (200, "application/json", player("Ada")),
+            ("POST", "/v1/auth/refresh") => (200, "application/json", player("Ada")),
+            ("GET", "/v1/profile") => (200, "application/json", player("Ada")),
+            ("PUT", "/v1/profile/skin") => (200, "application/json", player("Ada")),
+            _ => (
+                404,
+                "application/json",
+                json!({ "message": "missing" }).to_string(),
             ),
-            ("POST", "/v1/oauth/token") => (200, player("Ada")),
-            ("POST", "/v1/refresh") => (200, player("Ada")),
-            ("GET", "/v1/profile") => (200, player("Ada")),
-            _ => (404, json!({ "message": "missing" }).to_string()),
+        }
+    }
+
+    fn request_is_complete(buf: &[u8]) -> bool {
+        let Some(split) = buf.windows(4).position(|window| window == b"\r\n\r\n") else {
+            return false;
+        };
+        let header = String::from_utf8_lossy(&buf[..split]);
+        let length = header.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            if name.eq_ignore_ascii_case("content-length") {
+                value.trim().parse::<usize>().ok()
+            } else {
+                None
+            }
+        });
+        match length {
+            Some(length) => buf.len() >= split + 4 + length,
+            None => true,
         }
     }
 

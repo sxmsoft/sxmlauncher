@@ -162,7 +162,7 @@
     "customAccent": "Custom color",
     "developer": "Developer",
     "sxaccBase": "sx.acc base URL",
-    "sxaccBaseHint": "Account API is {BASE}/v1 and authlib is {BASE}/authlib/. Leave empty until you have a server. SXACC_BASE_URL overrides this field."
+    "sxaccBaseHint": "Sign-in is {BASE}/v1/auth/login, registration is {BASE}/v1/auth/register, authlib is {BASE}/authlib/. Public server: https://sx-acc.vercel.app. Leave empty to disable. SXACC_BASE_URL overrides this field."
   },
   "login": {
     "title": "Sign in",
@@ -185,7 +185,7 @@
     "nickname": "Nickname",
     "nicknameHint": "3–16 characters: letters, numbers, and underscores.",
     "createOffline": "Create offline profile",
-    "sxaccBody": "sx.acc email and password, or the browser flow when the server exposes it. The game launches with authlib pointed at that server.",
+    "sxaccBody": "sx.acc uses your in-game name and password. Sign-in sends that username (16 characters max), not an email. The game launches with authlib pointed at that server.",
     "sxaccMissing": "Set the sx.acc base URL in Settings → Accounts first. SXMLAUNCHER does not assume a host.",
     "sxaccEmail": "Email",
     "sxaccUsername": "In-game name",

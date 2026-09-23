@@ -14,6 +14,7 @@ on:
       - cursor/nebula-vault-ui-3cab
       - cursor/misty-visual-redesign-f4d5
       - cursor/misty-fixes-windows-build
+      - cursor/sxacc-account-b685
 
 jobs:
   build-windows:

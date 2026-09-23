@@ -592,7 +592,7 @@ function AccountsSection({ draft, patch }: SectionProps) {
             id="sxacc-base"
             value={draft.sxaccBaseUrl}
             onChange={(event) => patch({ sxaccBaseUrl: event.target.value.trim() })}
-            placeholder="http://127.0.0.1:8787"
+            placeholder="https://sx-acc.vercel.app"
             autoComplete="off"
             spellCheck={false}
           />

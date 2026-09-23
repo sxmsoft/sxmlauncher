@@ -555,7 +555,7 @@ export function mockResponse(command: string, args?: Record<string, unknown>): u
           "sx.acc base URL is not set. Add it in Settings → Accounts, or export SXACC_BASE_URL.",
         );
       }
-      const username = String(args?.username ?? (args?.email ? String(args.email).split("@")[0] : "sxplayer"));
+      const username = String(args?.username ?? "sxplayer");
       return rememberAccount({
         id: "sxacc-preview",
         provider: "sx_acc",

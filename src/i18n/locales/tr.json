@@ -162,7 +162,7 @@
     "customAccent": "Özel renk",
     "developer": "Geliştirici",
     "sxaccBase": "sx.acc adresi",
-    "sxaccBaseHint": "Hesap API’si {BASE}/v1, authlib {BASE}/authlib/. Sunucun yoksa boş bırak. SXACC_BASE_URL bu alanı ezer."
+    "sxaccBaseHint": "Giriş {BASE}/v1/auth/login, kayıt {BASE}/v1/auth/register, authlib {BASE}/authlib/. Açık sunucu: https://sx-acc.vercel.app. Kapatmak için boş bırak. SXACC_BASE_URL bu alanı ezer."
   },
   "login": {
     "title": "Giriş yap",
@@ -185,7 +185,7 @@
     "nickname": "Takma ad",
     "nicknameHint": "3–16 karakter: harf, rakam ve alt çizgi.",
     "createOffline": "Çevrimdışı profil oluştur",
-    "sxaccBody": "sx.acc e-posta ve parola, ya da sunucu açıyorsa tarayıcı akışı. Oyun, authlib o sunucuya bakacak şekilde açılır.",
+    "sxaccBody": "sx.acc oyun içi ad ve parola kullanır. Giriş, e-posta değil bu adı gönderir (en fazla 16 karakter). Oyun, authlib o sunucuya bakacak şekilde açılır.",
     "sxaccMissing": "Önce Ayarlar → Hesaplar’dan sx.acc adresini yaz. SXMLAUNCHER bir sunucu adı varsaymaz.",
     "sxaccEmail": "E-posta",
     "sxaccUsername": "Oyun içi ad",

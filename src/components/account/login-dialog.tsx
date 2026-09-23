@@ -62,7 +62,7 @@ export function LoginDialog({
   const [nickname, setNickname] = useState("");
   const [elyUsername, setElyUsername] = useState("");
   const [elyPassword, setElyPassword] = useState("");
-  const [sxEmail, setSxEmail] = useState("");
+  const [sxUsernameLogin, setSxUsernameLogin] = useState("");
   const [sxPassword, setSxPassword] = useState("");
   const [sxRegEmail, setSxRegEmail] = useState("");
   const [sxRegPassword, setSxRegPassword] = useState("");
@@ -194,12 +194,13 @@ export function LoginDialog({
             ) : null}
             <Card className="flex flex-col gap-3 rounded-2xl p-4">
               <span className="text-xs font-medium">{t("login.signIn")}</span>
-              <Field label={t("login.sxaccEmail")} htmlFor="sx-email">
+              <Field label={t("login.username")} htmlFor="sx-user" hint={t("login.nicknameHint")}>
                 <Input
-                  id="sx-email"
-                  value={sxEmail}
-                  onChange={(event) => setSxEmail(event.target.value)}
-                  placeholder="ada@example.com"
+                  id="sx-user"
+                  value={sxUsernameLogin}
+                  onChange={(event) => setSxUsernameLogin(event.target.value)}
+                  placeholder="Ada"
+                  maxLength={16}
                   autoComplete="username"
                 />
               </Field>
@@ -214,11 +215,16 @@ export function LoginDialog({
               </Field>
               <Button
                 size="sm"
-                disabled={!sxBase || !sxEmail || !sxPassword || sxCaps.data?.password === false}
+                disabled={
+                  !sxBase ||
+                  sxUsernameLogin.trim().length < 3 ||
+                  !sxPassword ||
+                  sxCaps.data?.password === false
+                }
                 loading={sxLogin.isPending}
                 onClick={() =>
                   sxLogin.mutate(
-                    { email: sxEmail.trim(), password: sxPassword },
+                    { username: sxUsernameLogin.trim(), password: sxPassword },
                     { onSuccess: onSignedIn },
                   )
                 }

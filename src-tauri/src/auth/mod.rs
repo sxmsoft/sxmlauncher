@@ -632,13 +632,13 @@ impl AccountManager {
             .await
     }
 
-    /// Email (or username) and password against `{BASE}/v1/login`.
+    /// Username and password against `{BASE}/v1/auth/login`.
     pub async fn login_sxacc_password(
         &self,
-        identifier: &str,
+        username: &str,
         password: &str,
     ) -> AppResult<AccountSummary> {
-        self.finalize_sxacc(self.sxacc.login_password(identifier, password).await?)
+        self.finalize_sxacc(self.sxacc.login_password(username, password).await?)
             .await
     }
 
