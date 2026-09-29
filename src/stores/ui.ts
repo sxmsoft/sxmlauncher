@@ -106,6 +106,9 @@ function describeFailure(error: unknown): string {
   if (error instanceof CommandFailure && error.code === "UNAUTHORIZED") {
     return i18n.t("errors.relogin");
   }
+  if (/session refresh timed out/i.test(raw)) {
+    return i18n.t("errors.sxaccRefresh");
+  }
   if (/could not reach sx\.acc/i.test(raw)) {
     return i18n.t("errors.sxaccOffline");
   }

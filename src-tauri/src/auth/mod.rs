@@ -5,9 +5,12 @@
 //!   launch identity is assembled inside the backend and handed straight to the
 //!   JVM argument builder.
 //! * Refresh tokens live only in the OS credential vault.
-//! * A refresh that fails with [`AppError::Unauthorized`] means the player must
-//!   sign in again — the account row stays (so instances keep their owner) but
-//!   `has_stored_credentials` flips to `false`.
+//! * A refresh that fails with [`AppError::Unauthorized`] (HTTP 401,
+//!   `invalid_grant`, or `invalid_token`) means the player must sign in again.
+//!   The account row stays, and `has_stored_credentials` flips to `false`.
+//! * A timeout or other transport failure does not delete the saved login.
+//!   sx.acc skips refresh entirely while the access token is still valid, and
+//!   a refresh that does run is capped at a few seconds.
 //! * Concurrent refreshes for the same account are coalesced, because two
 //!   parallel refreshes with a rotating refresh token would invalidate one.
 
@@ -36,7 +39,9 @@ pub mod vault;
 pub use elyby::{
     ElyByAuth, ElyDeviceCode, ElySession, AUTHLIB_INJECTOR_URL, ELYBY_CLIENT_ID, ELYBY_SCOPE,
 };
-pub use msa::{DeviceCodePrompt, MicrosoftAuth, MsaLoginOutcome, MSA_LEGACY_REDIRECT_URI, MSA_LEGACY_SCHEME};
+pub use msa::{
+    DeviceCodePrompt, MicrosoftAuth, MsaLoginOutcome, MSA_LEGACY_REDIRECT_URI, MSA_LEGACY_SCHEME,
+};
 pub use oauth::{CallbackQuery, CallbackResult, LoopbackServer, PkceCode};
 pub use offline::{create_offline_account, offline_identity, offline_uuid, validate_username};
 pub use vault::{account_key, select_vault, CredentialVault, KeyringVault, MemoryVault};
@@ -45,6 +50,18 @@ pub use vault::{account_key, select_vault, CredentialVault, KeyringVault, Memory
 const ACTIVE_ACCOUNT_KEY: &str = "app.active_account";
 /// Refresh a token this many seconds before it actually expires.
 const EXPIRY_SKEW_SECS: i64 = 120;
+
+/// How early `ensure_tokens` treats a session as expired.
+///
+/// sx.acc's refresh route can hang on a token the server still accepts, so
+/// Play, profile, and skin use the access token until `expires_at`. Other
+/// providers keep the two-minute skew.
+fn refresh_skew(provider: AccountProvider) -> i64 {
+    match provider {
+        AccountProvider::SxAcc => 0,
+        _ => EXPIRY_SKEW_SECS,
+    }
+}
 
 /// A sign-in that is waiting for the user to finish in a browser.
 ///
@@ -291,7 +308,10 @@ impl AccountManager {
             // `ELYBY_LOCAL_CLIENT` is the Authlib client token, not an OAuth
             // secret. Substituting it makes every token exchange fail with
             // `invalid_client`. A missing secret stays missing.
-            elyby: match config.elyby_client_secret.filter(|secret| !secret.trim().is_empty()) {
+            elyby: match config
+                .elyby_client_secret
+                .filter(|secret| !secret.trim().is_empty())
+            {
                 Some(secret) => {
                     ElyByAuth::with_secret(http.clone(), config.elyby_client_id, secret)
                 }
@@ -311,6 +331,11 @@ impl AccountManager {
 
     pub fn db(&self) -> &Database {
         &self.db
+    }
+
+    #[cfg(test)]
+    pub(crate) fn vault(&self) -> &Arc<dyn CredentialVault> {
+        &self.vault
     }
 
     /// Restore the previously active account (called once at startup).
@@ -404,9 +429,9 @@ impl AccountManager {
 
         let pkce = PkceCode::generate()?;
         let server = LoopbackServer::bind().await?;
-        let authorize_url = self
-            .msa
-            .authorize_url(server.redirect_uri(), &pkce.challenge, &state)?;
+        let authorize_url =
+            self.msa
+                .authorize_url(server.redirect_uri(), &pkce.challenge, &state)?;
 
         Ok(PendingLogin {
             login_id: Uuid::new_v4(),
@@ -425,7 +450,10 @@ impl AccountManager {
         let verifier = pending.verifier.clone();
         let code = pending.wait_for_code().await?;
 
-        let token_response = self.msa.exchange_code(&code, &verifier, &redirect_uri).await?;
+        let token_response = self
+            .msa
+            .exchange_code(&code, &verifier, &redirect_uri)
+            .await?;
         let outcome = self.msa.complete_login(&token_response).await?;
 
         self.finalize_login(LoginOutcome {
@@ -512,7 +540,9 @@ impl AccountManager {
             CallbackSource::ElyDevice(device) => self.elyby.poll_device_code(&device).await?,
             CallbackSource::Loopback(server) => {
                 let callback = server.wait_for_code(&state).await?;
-                self.elyby.exchange_code(&callback.code, &redirect_uri).await?
+                self.elyby
+                    .exchange_code(&callback.code, &redirect_uri)
+                    .await?
             }
             CallbackSource::Protocol(_) => {
                 return Err(AppError::Account(
@@ -686,7 +716,8 @@ impl AccountManager {
         }
 
         self.db.upsert_account(&account)?;
-        self.db.set_setting(ACTIVE_ACCOUNT_KEY, &account.id.to_string())?;
+        self.db
+            .set_setting(ACTIVE_ACCOUNT_KEY, &account.id.to_string())?;
         *self.active.lock() = Some(account.id);
 
         Ok(account.summary())
@@ -696,9 +727,7 @@ impl AccountManager {
 
     /// Identity for the currently selected account, refreshed if needed.
     pub async fn active_identity(&self) -> AppResult<LaunchIdentity> {
-        let id = self
-            .active_id()
-            .ok_or(AppError::Unauthorized)?;
+        let id = self.active_id().ok_or(AppError::Unauthorized)?;
         self.launch_identity(id).await
     }
 
@@ -755,8 +784,12 @@ impl AccountManager {
     async fn ensure_tokens(&self, account: &UserAccount) -> AppResult<TokenSet> {
         let key = account_key(account.provider, account.uuid);
         let stored = self.vault.load(&key).await?.ok_or(AppError::Unauthorized)?;
+        let skew = refresh_skew(account.provider);
 
-        if !stored.is_expired(EXPIRY_SKEW_SECS) {
+        // Still accepted by the server: do not call refresh. For sx.acc this
+        // is the whole access-token lifetime, so a hung refresh cannot block
+        // Play or a skin upload.
+        if !stored.is_expired(skew) {
             return Ok(stored);
         }
         if !stored.can_refresh() {
@@ -778,7 +811,7 @@ impl AccountManager {
             for _ in 0..40 {
                 tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                 if let Some(tokens) = self.vault.load(&key).await? {
-                    if !tokens.is_expired(EXPIRY_SKEW_SECS) {
+                    if !tokens.is_expired(skew) {
                         return Ok(tokens);
                     }
                 }
@@ -794,15 +827,16 @@ impl AccountManager {
         match result {
             Ok(tokens) => {
                 self.vault.store(&key, &tokens).await?;
-                self.db.set_account_expiry(account.id, Some(tokens.expires_at))?;
+                self.db
+                    .set_account_expiry(account.id, Some(tokens.expires_at))?;
                 Ok(tokens)
             }
+            // Only a real rejection signs the player out. Timeouts and
+            // connection errors leave the vault entry in place.
             Err(AppError::Unauthorized) => {
                 self.mark_signed_out(account).await?;
                 Err(AppError::Unauthorized)
             }
-            // The 120s skew refreshes a token that the server still accepts.
-            // A transport failure in that window must not block Play.
             Err(AppError::Network(_)) if Utc::now() < stored.expires_at => Ok(stored),
             Err(err) => Err(err),
         }
@@ -870,11 +904,8 @@ impl AccountManager {
                         renamed.username = info.username.clone();
                         if let Ok(uuid) = MinecraftUuid::parse_str(&info.uuid) {
                             renamed.uuid = uuid;
-                            renamed.skin = self
-                                .elyby
-                                .fetch_textures(uuid)
-                                .await
-                                .unwrap_or_default();
+                            renamed.skin =
+                                self.elyby.fetch_textures(uuid).await.unwrap_or_default();
                         }
                         self.db.upsert_account(&renamed)?;
                     }
@@ -943,7 +974,8 @@ impl AccountManager {
             let fallback = self.db.list_accounts()?.into_iter().next();
             match fallback {
                 Some(account) => {
-                    self.db.set_setting(ACTIVE_ACCOUNT_KEY, &account.id.to_string())?;
+                    self.db
+                        .set_setting(ACTIVE_ACCOUNT_KEY, &account.id.to_string())?;
                     *self.active.lock() = Some(account.id);
                 }
                 None => {
@@ -1063,14 +1095,12 @@ impl AccountManager {
                 // the whole XBL/XSTS exchange when the stored one is stale.
                 let tokens = self.ensure_tokens(&account).await?;
                 let http = self.http_for_skins();
-                skin_upload::upload_skin_to_mojang(&http, &tokens.access_token, model, png)
-                    .await?;
+                skin_upload::upload_skin_to_mojang(&http, &tokens.access_token, model, png).await?;
 
                 // Read the profile back so the UI can show the applied skin
                 // immediately (the session server reflects uploads fast, and
                 // it is the same source `refresh_skin` uses).
-                let skin =
-                    msa::fetch_skin_from_session_server(&http, account.uuid).await?;
+                let skin = msa::fetch_skin_from_session_server(&http, account.uuid).await?;
                 let mut updated = account;
                 updated.skin = skin.clone();
                 self.db.upsert_account(&updated)?;
@@ -1140,11 +1170,8 @@ mod tests {
     async fn online_account_without_vault_entry_reports_unauthorized() {
         let manager = manager();
         // Simulate an online account whose vault entry was wiped.
-        let mut account = UserAccount::new(
-            AccountProvider::Microsoft,
-            "Steve".into(),
-            Uuid::new_v4(),
-        );
+        let mut account =
+            UserAccount::new(AccountProvider::Microsoft, "Steve".into(), Uuid::new_v4());
         account.has_stored_credentials = true;
         manager.db.upsert_account(&account).expect("seed");
 
@@ -1214,8 +1241,7 @@ mod tests {
         let db = Database::open_in_memory().expect("db");
         let mut config = ProviderConfig::default();
         config.msa_client_id = "11111111-2222-3333-4444-555555555555".into();
-        let manager =
-            AccountManager::new_with_config(db, Arc::new(MemoryVault::new()), config);
+        let manager = AccountManager::new_with_config(db, Arc::new(MemoryVault::new()), config);
         let pending = manager.begin_msa_login().await.expect("begin");
         assert!(pending.authorize_url.contains("login.microsoftonline.com"));
         assert!(pending.authorize_url.contains("code_challenge="));
@@ -1258,8 +1284,7 @@ mod tests {
         config.elyby_client_id = "my-web-app".into();
         config.elyby_client_secret = Some("not-a-real-secret".into());
         config.elyby_redirect_uri = "http://localhost:25564/elyby/callback".into();
-        let manager =
-            AccountManager::new_with_config(db, Arc::new(MemoryVault::new()), config);
+        let manager = AccountManager::new_with_config(db, Arc::new(MemoryVault::new()), config);
         let pending = manager.begin_elyby_login().await.expect("begin");
         assert!(pending
             .authorize_url
@@ -1267,7 +1292,10 @@ mod tests {
         assert!(pending.authorize_url.contains("client_id=my-web-app"));
         assert!(pending.authorize_url.contains("25564"));
         assert!(pending.authorize_url.contains("elyby"));
-        assert_eq!(pending.redirect_uri, "http://localhost:25564/elyby/callback");
+        assert_eq!(
+            pending.redirect_uri,
+            "http://localhost:25564/elyby/callback"
+        );
         assert_eq!(pending.provider, AccountProvider::ElyBy);
         assert!(!pending.authorize_url.contains("code_challenge"));
     }

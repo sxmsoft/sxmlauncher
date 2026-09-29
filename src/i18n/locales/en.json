@@ -282,6 +282,7 @@
   "errors": {
     "relogin": "Sign in again. This session expired.",
     "sxaccOffline": "sx.acc is unreachable. Check the connection, then try again.",
+    "sxaccRefresh": "sx.acc did not finish refreshing this session. Sign in again to keep playing. Your saved login was kept.",
     "couldNotLaunch": "Could not launch",
     "couldNotApplySkin": "Could not apply the skin",
     "couldNotReloadSkin": "Could not reload the skin",

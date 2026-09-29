@@ -32,6 +32,9 @@ pub const SXACC_SCHEME: &str = "sxmlauncher";
 pub const SXACC_VERSION_LABEL: &str = "sx.acc";
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(8);
+/// POST /v1/auth/refresh on a valid token can hang with no bytes. Cap it so
+/// Play and skin uploads fail with a message instead of spinning.
+const REFRESH_TIMEOUT: Duration = Duration::from_secs(9);
 
 /// What the sign-in UI should offer for the configured base URL.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -266,23 +269,30 @@ impl SxAccAuth {
     }
 
     pub async fn refresh(&self, refresh_token: &str) -> AppResult<SxAccSession> {
-        let endpoints = self.discover().await?;
+        self.require_base()?;
         let refresh_token = refresh_token.trim();
         if refresh_token.is_empty() {
             return Err(AppError::Unauthorized);
         }
+        // Discovery is optional. A hung index must not sit in front of refresh,
+        // and the refresh POST itself is not retried.
+        let endpoints = self.endpoints_for_refresh().await;
 
         let json_body = json!({ "refresh_token": refresh_token });
-        let refreshed = match self.post_json(&endpoints.refresh, &json_body).await {
+        let refreshed = match self
+            .post_once(&endpoints.refresh, &json_body, REFRESH_TIMEOUT)
+            .await
+        {
             Ok(value) => value,
             Err(AppError::Account(message)) if message_is_missing_route(&message) => {
-                self.post_token(
+                self.post_form_once(
                     &endpoints.token,
                     &[
                         ("grant_type", "refresh_token"),
                         ("refresh_token", refresh_token),
                         ("client_id", SXACC_OAUTH_CLIENT_ID),
                     ],
+                    REFRESH_TIMEOUT,
                 )
                 .await?
             }
@@ -292,6 +302,14 @@ impl SxAccAuth {
             Err(err) => return Err(err),
         };
         self.finish_session(&endpoints, refreshed).await
+    }
+
+    /// Standard routes when discovery is slow or unreachable.
+    async fn endpoints_for_refresh(&self) -> Endpoints {
+        match tokio::time::timeout(Duration::from_secs(3), self.discover()).await {
+            Ok(Ok(endpoints)) => endpoints,
+            _ => Endpoints::standard(&self.base_url),
+        }
     }
 
     pub async fn exchange_code(&self, code: &str, verifier: &str) -> AppResult<SxAccSession> {
@@ -365,7 +383,9 @@ impl SxAccAuth {
         )
         .map(|raw| human_device_page(raw, &user_code))
         .unwrap_or_else(|| human_device_page(&device_url, &user_code));
-        let expires_in = find_i64(&value, &["expires_in", "expiresIn"]).unwrap_or(900).max(30);
+        let expires_in = find_i64(&value, &["expires_in", "expiresIn"])
+            .unwrap_or(900)
+            .max(30);
         let interval = find_i64(&value, &["interval"]).unwrap_or(5).clamp(1, 60);
         let message = find_string(&value, &["message"])
             .unwrap_or("Enter the code in your browser to finish sx.acc sign-in")
@@ -403,10 +423,7 @@ impl SxAccAuth {
                 .post_token(
                     &grant.token_url,
                     &[
-                        (
-                            "grant_type",
-                            "urn:ietf:params:oauth:grant-type:device_code",
-                        ),
+                        ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
                         ("device_code", grant.device_code.as_str()),
                         ("client_id", SXACC_OAUTH_CLIENT_ID),
                     ],
@@ -428,8 +445,9 @@ impl SxAccAuth {
                                 )));
                             }
                             other => {
-                                let detail = find_string(&value, &["error_description", "errorDescription"])
-                                    .unwrap_or(other);
+                                let detail =
+                                    find_string(&value, &["error_description", "errorDescription"])
+                                        .unwrap_or(other);
                                 return Err(AppError::Account(format!(
                                     "sx.acc device sign-in failed: {detail}"
                                 )));
@@ -438,9 +456,7 @@ impl SxAccAuth {
                     }
                     return self.finish_session(&endpoints, value).await;
                 }
-                Err(AppError::Account(message))
-                    if message.contains("authorization_pending") =>
-                {
+                Err(AppError::Account(message)) if message.contains("authorization_pending") => {
                     continue;
                 }
                 Err(AppError::Account(message)) if message.contains("slow_down") => {
@@ -493,7 +509,9 @@ impl SxAccAuth {
             .await
             .map_err(|err| transport_error(&endpoints.skin, err))?;
         let status = response.status();
-        if status == reqwest::StatusCode::NOT_FOUND || status == reqwest::StatusCode::METHOD_NOT_ALLOWED {
+        if status == reqwest::StatusCode::NOT_FOUND
+            || status == reqwest::StatusCode::METHOD_NOT_ALLOWED
+        {
             return Ok(None);
         }
         let value = read_json(response).await?;
@@ -618,6 +636,44 @@ impl SxAccAuth {
         read_json(response).await
     }
 
+    /// One attempt, no retry. Used for session refresh so a hung server
+    /// cannot double the wait.
+    async fn post_once(&self, url: &str, body: &Value, timeout: Duration) -> AppResult<Value> {
+        let response = self
+            .http
+            .post(url)
+            .timeout(timeout)
+            .json(body)
+            .send()
+            .await
+            .map_err(|err| refresh_transport_error(url, err))?;
+        read_json(response).await
+    }
+
+    async fn post_form_once(
+        &self,
+        url: &str,
+        fields: &[(&str, &str)],
+        timeout: Duration,
+    ) -> AppResult<Value> {
+        let response = self
+            .http
+            .post(url)
+            .timeout(timeout)
+            .form(fields)
+            .send()
+            .await
+            .map_err(|err| refresh_transport_error(url, err))?;
+        if response.status() == reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE {
+            let mut map = serde_json::Map::new();
+            for (key, value) in fields {
+                map.insert((*key).to_string(), json!(value));
+            }
+            return self.post_once(url, &Value::Object(map), timeout).await;
+        }
+        read_json(response).await
+    }
+
     async fn post_token(&self, url: &str, fields: &[(&str, &str)]) -> AppResult<Value> {
         let response = self
             .send(self.http.post(url).form(fields))
@@ -688,8 +744,18 @@ impl Endpoints {
         endpoints.register_enabled = register;
         endpoints.oauth = oauth;
         endpoints.device_enabled = device;
-        endpoints.register = resolve_path(base, value, &["register", "registration"], &endpoints.register);
-        endpoints.login = resolve_path(base, value, &["login", "signIn", "sign_in"], &endpoints.login);
+        endpoints.register = resolve_path(
+            base,
+            value,
+            &["register", "registration"],
+            &endpoints.register,
+        );
+        endpoints.login = resolve_path(
+            base,
+            value,
+            &["login", "signIn", "sign_in"],
+            &endpoints.login,
+        );
         endpoints.refresh = resolve_path(base, value, &["refresh", "token"], &endpoints.refresh);
         endpoints.profile = resolve_path(base, value, &["profile", "me"], &endpoints.profile);
         endpoints.skin = resolve_path(base, value, &["skin"], &endpoints.skin);
@@ -697,7 +763,11 @@ impl Endpoints {
         endpoints.authorize = resolve_oauth(
             base,
             value,
-            &["authorizationEndpoint", "authorization_endpoint", "authorize"],
+            &[
+                "authorizationEndpoint",
+                "authorization_endpoint",
+                "authorize",
+            ],
             &endpoints.authorize,
         );
         endpoints.token = resolve_oauth(
@@ -783,10 +853,7 @@ fn is_loopback_host(raw: &str) -> bool {
     } else {
         host.split(':').next().unwrap_or(host)
     };
-    matches!(
-        host,
-        "localhost" | "127.0.0.1" | "0.0.0.0" | "::1"
-    )
+    matches!(host, "localhost" | "127.0.0.1" | "0.0.0.0" | "::1")
 }
 
 fn validate_email(email: &str) -> AppResult<()> {
@@ -860,6 +927,15 @@ fn transport_error(url: &str, err: reqwest::Error) -> AppError {
     ))
 }
 
+/// Refresh transport failures keep the saved login. The text is what the UI
+/// turns into the re-login toast; it must not look like a generic offline error.
+fn refresh_transport_error(url: &str, err: reqwest::Error) -> AppError {
+    AppError::Network(format!(
+        "sx.acc session refresh timed out ({url}): {}. Sign in again to keep playing. Your saved login was kept.",
+        crate::http::error_chain(&err)
+    ))
+}
+
 fn append_query(url: &str, pairs: &[(&str, &str)]) -> AppResult<String> {
     let mut url = url::Url::parse(url).map_err(|err| {
         AppError::Account(format!("sx.acc authorization endpoint is not a URL: {err}"))
@@ -922,7 +998,12 @@ fn flow_flags(value: &Value) -> (bool, bool, bool, bool) {
                     })
                 })
             };
-            (has("password"), has("register"), has("oauth"), has("device"))
+            (
+                has("password"),
+                has("register"),
+                has("oauth"),
+                has("device"),
+            )
         }
         Some(Value::Object(map)) => {
             let flag = |name: &str| map.get(name).and_then(|v| v.as_bool()).unwrap_or(true);
@@ -953,7 +1034,9 @@ async fn read_json(response: reqwest::Response) -> AppResult<Value> {
         return Ok(Value::Null);
     }
     serde_json::from_str(&body).map_err(|err| {
-        AppError::Account(format!("sx.acc returned a response that is not JSON ({err})"))
+        AppError::Account(format!(
+            "sx.acc returned a response that is not JSON ({err})"
+        ))
     })
 }
 
@@ -1003,18 +1086,18 @@ fn message_is_unauthorized(message: &str) -> bool {
 }
 
 fn parse_session(base: &str, value: &Value) -> AppResult<SxAccSession> {
-    let access = find_string(value, &["accessToken", "access_token", "token", "sessionToken"])
-        .ok_or_else(|| {
-            AppError::Account("sx.acc response did not include an access token".into())
-        })?
-        .to_string();
+    let access = find_string(
+        value,
+        &["accessToken", "access_token", "token", "sessionToken"],
+    )
+    .ok_or_else(|| AppError::Account("sx.acc response did not include an access token".into()))?
+    .to_string();
     let refresh = find_string(value, &["refreshToken", "refresh_token"]).map(str::to_string);
     let username = find_username(value)
         .ok_or_else(|| AppError::Account("sx.acc response did not include a username".into()))?
         .to_string();
-    let uuid = find_uuid(value).ok_or_else(|| {
-        AppError::Account("sx.acc response did not include a player uuid".into())
-    })?;
+    let uuid = find_uuid(value)
+        .ok_or_else(|| AppError::Account("sx.acc response did not include a player uuid".into()))?;
     let expires_at = expires_from(value);
     Ok(SxAccSession {
         username,
@@ -1144,10 +1227,9 @@ fn apply_skin_node(base: &str, node: &Value, skin: &mut SkinProfile) {
             let Some(encoded) = string_field(property, &["value"]) else {
                 continue;
             };
-            let Ok(bytes) = base64::Engine::decode(
-                &base64::engine::general_purpose::STANDARD,
-                encoded,
-            ) else {
+            let Ok(bytes) =
+                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
+            else {
                 continue;
             };
             let Ok(decoded) = serde_json::from_slice::<Value>(&bytes) else {
@@ -1358,10 +1440,7 @@ mod tests {
     fn authorize_url_is_the_public_client_with_pkce() {
         let endpoints = Endpoints::standard("http://127.0.0.1:9");
         let url = endpoints.authorize_url("chal", "st").unwrap();
-        assert!(
-            url.starts_with("http://127.0.0.1:9/authorize?"),
-            "{url}"
-        );
+        assert!(url.starts_with("http://127.0.0.1:9/authorize?"), "{url}");
         assert!(
             !url.contains("/v1/oauth/authorize"),
             "browser sign-in must not open the POST-only API: {url}"
@@ -1556,8 +1635,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            rejected.to_string().contains("16")
-                || rejected.to_string().contains("underscores"),
+            rejected.to_string().contains("16") || rejected.to_string().contains("underscores"),
             "{rejected}"
         );
 
@@ -1595,6 +1673,9 @@ mod tests {
                 && body.contains("name=\"file\"")
                 && body.contains("name=\"model\"")
                 && body.contains("classic")
+        }));
+        assert!(recorded.iter().any(|(method, path, body)| {
+            method == "HEADER" && path == "/v1/profile/skin" && body.contains("Bearer acc-token")
         }));
         assert!(!recorded.iter().any(|(method, path, _)| {
             method == "GET" && path == "/v1/profile/skin"
@@ -1640,7 +1721,10 @@ mod tests {
 
         let summary = manager.complete_sxacc_login(pending).await.unwrap();
         assert_eq!(summary.username, "Ada");
-        assert_eq!(summary.provider, crate::models::account::AccountProvider::SxAcc);
+        assert_eq!(
+            summary.provider,
+            crate::models::account::AccountProvider::SxAcc
+        );
 
         let identity = manager.launch_identity(summary.id).await.unwrap();
         let authlib = format!("{base}/authlib/");
@@ -1661,6 +1745,125 @@ mod tests {
         assert!(!token.2.contains("client_secret"));
     }
 
+    fn manager_for(base: &str) -> crate::auth::AccountManager {
+        let db = crate::store::Database::open_in_memory().unwrap();
+        let mut config = crate::auth::ProviderConfig::default();
+        config.sxacc_base_url = base.to_string();
+        crate::auth::AccountManager::new_with_config(
+            db,
+            Arc::new(crate::auth::vault::MemoryVault::new()),
+            config,
+        )
+    }
+
+    fn skin_png() -> Vec<u8> {
+        let mut png = vec![
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, b'I', b'H',
+            b'D', b'R',
+        ];
+        png.extend_from_slice(&64u32.to_be_bytes());
+        png.extend_from_slice(&64u32.to_be_bytes());
+        png
+    }
+
+    async fn expire_in(manager: &crate::auth::AccountManager, id: Uuid, secs: i64) -> String {
+        let account = manager.get_account(id).await.unwrap();
+        let key = crate::auth::account_key(account.provider, account.uuid);
+        let mut tokens = manager.vault().load(&key).await.unwrap().unwrap();
+        tokens.expires_at = Utc::now() + chrono::Duration::seconds(secs);
+        manager.vault().store(&key, &tokens).await.unwrap();
+        key
+    }
+
+    #[tokio::test]
+    async fn unexpired_access_token_skips_refresh_for_launch_and_skin() {
+        let hits = Arc::new(Mutex::new(Vec::new()));
+        let base = spawn_server(hits.clone(), RefreshMode::Hang).await;
+        let manager = manager_for(&base);
+        let summary = manager
+            .login_sxacc_password("Ada", "correct-horse")
+            .await
+            .unwrap();
+        // 45s is inside the old 120s skew and still unexpired.
+        let _key = expire_in(&manager, summary.id, 45).await;
+        hits.lock().await.clear();
+
+        let identity = manager.launch_identity(summary.id).await.unwrap();
+        assert_eq!(identity.access_token, "acc-token");
+
+        let skin = manager.refresh_skin(summary.id).await.unwrap();
+        assert_eq!(
+            skin.skin_url.as_deref(),
+            Some("https://textures.example/ada.png")
+        );
+        manager
+            .upload_skin(summary.id, SkinModel::Classic, skin_png())
+            .await
+            .unwrap();
+
+        let recorded = hits.lock().await.clone();
+        assert!(
+            !recorded
+                .iter()
+                .any(|(_, path, _)| path == "/v1/auth/refresh"),
+            "refresh ran while the access token was still valid: {recorded:?}"
+        );
+        assert!(recorded
+            .iter()
+            .any(|(method, path, _)| method == "GET" && path == "/v1/profile"));
+        assert!(recorded.iter().any(|(method, path, body)| {
+            method == "HEADER"
+                && path == "/v1/profile/skin"
+                && body.to_ascii_lowercase().contains("bearer acc-token")
+        }));
+    }
+
+    #[tokio::test]
+    async fn hanging_refresh_keeps_the_saved_login() {
+        let hits = Arc::new(Mutex::new(Vec::new()));
+        let base = spawn_server(hits.clone(), RefreshMode::Hang).await;
+        let manager = manager_for(&base);
+        let summary = manager
+            .login_sxacc_password("Ada", "correct-horse")
+            .await
+            .unwrap();
+        let key = expire_in(&manager, summary.id, -5).await;
+
+        let started = std::time::Instant::now();
+        let err = manager.launch_identity(summary.id).await.unwrap_err();
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(15),
+            "refresh hung for {elapsed:?}: {err}"
+        );
+        assert!(
+            err.to_string().contains("session refresh timed out"),
+            "{err}"
+        );
+        assert_ne!(err.code(), crate::error::CODE_UNAUTHORIZED);
+        let account = manager.get_account(summary.id).await.unwrap();
+        assert!(account.has_stored_credentials);
+        assert!(manager.vault().load(&key).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn invalid_grant_on_refresh_signs_the_account_out() {
+        let hits = Arc::new(Mutex::new(Vec::new()));
+        let base = spawn_server(hits.clone(), RefreshMode::Unauthorized).await;
+        let manager = manager_for(&base);
+        let summary = manager
+            .login_sxacc_password("Ada", "correct-horse")
+            .await
+            .unwrap();
+        let key = expire_in(&manager, summary.id, -5).await;
+
+        let err = manager.launch_identity(summary.id).await.unwrap_err();
+        assert_eq!(err.code(), crate::error::CODE_UNAUTHORIZED);
+        let account = manager.get_account(summary.id).await.unwrap();
+        assert!(!account.has_stored_credentials);
+        assert!(manager.vault().load(&key).await.unwrap().is_none());
+    }
+
     fn test_http() -> reqwest::Client {
         reqwest::Client::builder()
             .timeout(Duration::from_secs(5))
@@ -1669,6 +1872,20 @@ mod tests {
     }
 
     async fn spawn_v1(hits: Arc<Mutex<Vec<(String, String, String)>>>) -> String {
+        spawn_server(hits, RefreshMode::Ok).await
+    }
+
+    #[derive(Clone, Copy)]
+    enum RefreshMode {
+        Ok,
+        Unauthorized,
+        Hang,
+    }
+
+    async fn spawn_server(
+        hits: Arc<Mutex<Vec<(String, String, String)>>>,
+        refresh: RefreshMode,
+    ) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
@@ -1677,6 +1894,7 @@ mod tests {
                     break;
                 };
                 let hits = hits.clone();
+                let refresh = refresh;
                 tokio::spawn(async move {
                     let mut buf = Vec::new();
                     let mut tmp = [0u8; 4096];
@@ -1687,7 +1905,9 @@ mod tests {
                         // Multipart uploads may be chunked. Wait briefly for
                         // the next bytes instead of treating a header-only
                         // read as the whole request.
-                        let read = tokio::time::timeout(Duration::from_millis(150), socket.read(&mut tmp)).await;
+                        let read =
+                            tokio::time::timeout(Duration::from_millis(150), socket.read(&mut tmp))
+                                .await;
                         match read {
                             Ok(Ok(0)) | Err(_) => break,
                             Ok(Ok(n)) => buf.extend_from_slice(&tmp[..n]),
@@ -1698,22 +1918,31 @@ mod tests {
                     let request_line = req.lines().next().unwrap_or("");
                     let mut parts = request_line.split_whitespace();
                     let method = parts.next().unwrap_or("");
-                    let path = parts
-                        .next()
-                        .unwrap_or("/")
-                        .split('?')
-                        .next()
-                        .unwrap_or("/");
+                    let path = parts.next().unwrap_or("/").split('?').next().unwrap_or("/");
                     // nth(1) stops at the next blank line, which multipart
                     // bodies contain. Keep every byte after the HTTP headers.
                     let body = req
                         .split_once("\r\n\r\n")
                         .map(|(_, rest)| rest.to_string())
                         .unwrap_or_default();
-                    hits.lock()
-                        .await
-                        .push((method.to_string(), path.to_string(), body.clone()));
-                    let (status, content_type, payload) = route(method, path, &body);
+                    let mut recorded = hits.lock().await;
+                    recorded.push((method.to_string(), path.to_string(), body.clone()));
+                    if let Some(header) = req.lines().find(|line| {
+                        let lower = line.to_ascii_lowercase();
+                        lower.starts_with("authorization:") && lower.contains("bearer")
+                    }) {
+                        recorded.push(("HEADER".into(), path.to_string(), header.to_string()));
+                    }
+                    drop(recorded);
+                    if matches!(refresh, RefreshMode::Hang)
+                        && method == "POST"
+                        && path == "/v1/auth/refresh"
+                    {
+                        // Hold the socket. The client must time out on its own.
+                        tokio::time::sleep(Duration::from_secs(60)).await;
+                        return;
+                    }
+                    let (status, content_type, payload) = route(method, path, &body, refresh);
                     let response = format!(
                         "HTTP/1.1 {status} {}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
                         reason(status),
@@ -1727,7 +1956,12 @@ mod tests {
         format!("http://127.0.0.1:{port}")
     }
 
-    fn route(method: &str, path: &str, _body: &str) -> (u16, &'static str, String) {
+    fn route(
+        method: &str,
+        path: &str,
+        _body: &str,
+        refresh: RefreshMode,
+    ) -> (u16, &'static str, String) {
         let player = |name: &str| {
             json!({
                 "access_token": "acc-token",
@@ -1746,10 +1980,20 @@ mod tests {
         };
         match (method, path) {
             // Live sx.acc answers GET /v1 with the website, not a discovery document.
-            ("GET", "/v1") => (200, "text/html", "<!doctype html><title>sx.acc</title>".into()),
+            ("GET", "/v1") => (
+                200,
+                "text/html",
+                "<!doctype html><title>sx.acc</title>".into(),
+            ),
             ("POST", "/v1/auth/login") => (200, "application/json", player("Ada")),
             ("POST", "/v1/auth/register") => (201, "application/json", player("Newbie")),
             ("POST", "/v1/oauth/token") => (200, "application/json", player("Ada")),
+            ("POST", "/v1/auth/refresh") if matches!(refresh, RefreshMode::Unauthorized) => (
+                401,
+                "application/json",
+                json!({ "error": "invalid_grant", "message": "refresh token rejected" })
+                    .to_string(),
+            ),
             ("POST", "/v1/auth/refresh") => (200, "application/json", player("Ada")),
             ("GET", "/v1/profile") => (200, "application/json", player("Ada")),
             ("PUT", "/v1/profile/skin") => (200, "application/json", player("Ada")),
@@ -1808,6 +2052,7 @@ mod tests {
         match status {
             200 => "OK",
             201 => "Created",
+            401 => "Unauthorized",
             404 => "Not Found",
             _ => "Error",
         }

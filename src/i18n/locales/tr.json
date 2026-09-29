@@ -282,6 +282,7 @@
   "errors": {
     "relogin": "Yeniden giriş yap. Bu oturumun süresi doldu.",
     "sxaccOffline": "sx.acc’e ulaşılamıyor. Bağlantıyı kontrol edip yeniden dene.",
+    "sxaccRefresh": "sx.acc oturum yenilemesini bitiremedi. Oynamaya devam etmek için yeniden giriş yap. Kayıtlı girişin duruyor.",
     "couldNotLaunch": "Başlatılamadı",
     "couldNotApplySkin": "Skin uygulanamadı",
     "couldNotReloadSkin": "Skin yeniden yüklenemedi",
