@@ -18,8 +18,6 @@ use crate::mods::ModEngine;
 #[serde(rename_all = "camelCase")]
 struct CfManifest {
     name: Option<String>,
-    #[serde(default)]
-    version: Option<String>,
     minecraft: CfMinecraft,
     files: Vec<CfManifestFile>,
 }

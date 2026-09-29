@@ -79,7 +79,8 @@ impl LaunchPlan {
     pub fn redacted_command_line(&self) -> String {
         let mut argv = self.command_line();
         for index in 0..argv.len() {
-            if argv[index] == "--accessToken" || argv[index] == "--clientId" {
+            // `--session` is the pre-1.6 spelling of the access token.
+            if matches!(argv[index].as_str(), "--accessToken" | "--session" | "--clientId") {
                 if index + 1 < argv.len() {
                     argv[index + 1] = "<redacted>".to_string();
                 }

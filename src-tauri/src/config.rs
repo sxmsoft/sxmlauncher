@@ -235,8 +235,12 @@ impl AppPaths {
 
 /// User-configurable settings, persisted to SQLite and mirrored to JSON.
 ///
-/// Secrets (`curseforge_api_key`) are persisted in the credential vault instead
-/// and only surfaced to the UI as a boolean `has_*` flag.
+/// NOTE: user-entered secrets (`curseforge_api_key`, `elyby_client_secret`,
+/// `host_password`, credentials inside `redis_url`) are currently persisted
+/// in plain text (SQLite + the `settings.json` mirror) and returned to the UI
+/// as-is. Env overrides are merged in at load, so saving Settings can persist
+/// an env-provided value too. Moving them to the credential vault is
+/// tracked in HANDOVER.md.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppSettings {

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tauri::{Emitter, Manager, State};
+use tauri::{Emitter, State};
 use uuid::Uuid;
 
 use crate::commands::{parse_uuid, GuestStatus, HostStatus, JoinStatus, NetworkStatus};
@@ -101,7 +101,7 @@ pub async fn server_set_favorite(
 /// What the header pill / Settings show as the directory endpoint.
 fn directory_label(settings: &crate::config::AppSettings) -> String {
     if settings.mqtt_broker.trim().is_empty() {
-        settings.redis_url.clone()
+        crate::network::directory::redact_redis_url(&settings.redis_url)
     } else {
         format!("mqtt://{}/{}", settings.mqtt_broker.trim(), settings.mqtt_port)
     }

@@ -62,13 +62,23 @@ impl RedisDirectory {
     pub async fn connect(url: &str) -> AppResult<Self> {
         let _ = redis_rustls::crypto::ring::default_provider().install_default();
         let client = redis::Client::open(url)
-            .map_err(|err| AppError::Directory(format!("invalid Redis url `{url}`: {err}")))?;
+            .map_err(|err| {
+                AppError::Directory(format!(
+                    "invalid Redis url `{}`: {err}",
+                    redact_redis_url(url)
+                ))
+            })?;
         let manager = tokio::time::timeout(
             Duration::from_secs(10),
             ConnectionManager::new(client.clone()),
         )
         .await
-        .map_err(|_| AppError::Directory(format!("Redis at {url} did not answer in time")))??;
+        .map_err(|_| {
+            AppError::Directory(format!(
+                "Redis at {} did not answer in time",
+                redact_redis_url(url)
+            ))
+        })??;
 
         let directory = Self {
             client,
@@ -417,6 +427,17 @@ impl RedisDirectory {
     }
 }
 
+/// Drop userinfo so a status pill, error, or log line cannot show the
+/// Redis password (Upstash URLs carry the token as the password).
+pub fn redact_redis_url(url: &str) -> String {
+    let Ok(mut parsed) = url::Url::parse(url) else {
+        return "redis://invalid".to_string();
+    };
+    let _ = parsed.set_password(None);
+    let _ = parsed.set_username("");
+    parsed.to_string()
+}
+
 // --- key builders (pure functions so the layout can be tested without Redis) --
 
 /// `sxml:<suffix>`
@@ -759,6 +780,14 @@ mod tests {
         let id = uuid::Uuid::nil();
         assert!(listing_key("sxml-dev", id).starts_with("sxml-dev:"));
         assert_ne!(listing_key("sxml-dev", id), listing_key("sxml", id));
+    }
+
+    #[test]
+    fn redis_urls_are_redacted_for_display() {
+        let redacted = redact_redis_url("rediss://default:not-a-real-token@example.upstash.io:6379");
+        assert!(!redacted.contains("not-a-real-token"));
+        assert!(redacted.contains("example.upstash.io"));
+        assert_eq!(redact_redis_url("not a url"), "redis://invalid");
     }
 
     #[test]
