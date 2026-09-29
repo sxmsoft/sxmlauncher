@@ -46,15 +46,13 @@ fn disable_stock_webview_menu(window: &tauri::WebviewWindow) {
                 return;
             };
             let _ = settings.SetAreDefaultContextMenusEnabled(false);
-            // DevTools and the browser accelerator keys (F12, Ctrl+Shift+I)
-            // stay available in debug builds.
+            // DevTools stay available in debug builds. Release builds turn
+            // them off on the base settings object. ICoreWebView2Settings3
+            // is not in the WebView2 bindings this crate compiles against,
+            // so browser accelerator keys are not toggled separately.
             #[cfg(not(debug_assertions))]
             {
                 let _ = settings.SetAreDevToolsEnabled(false);
-                use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
-                if let Ok(settings3) = settings.cast::<ICoreWebView2Settings3>() {
-                    let _ = settings3.SetAreBrowserAcceleratorKeysEnabled(false);
-                }
             }
         });
     }
