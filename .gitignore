@@ -1,29 +1,58 @@
+# ---------------------------------------------------------------------------
 # dependencies
+# ---------------------------------------------------------------------------
 node_modules/
+.pnpm-store/
 
-# frontend build output
+# ---------------------------------------------------------------------------
+# build output
+# ---------------------------------------------------------------------------
 /dist
 /dist-ssr
-*.local
-
-# rust / tauri build output
+/dist-artifacts
 /src-tauri/target
 /src-tauri/gen
+*.tsbuildinfo
+coverage/
 
-# local app data that must never be committed
+# ---------------------------------------------------------------------------
+# environment / secrets (only .env.example is tracked)
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.local
+
+# updater signing keys and any other key material (NEVER commit these)
+.keys/
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# ---------------------------------------------------------------------------
+# local app data, QA artefacts, logs
+# ---------------------------------------------------------------------------
 *.db
 *.db-journal
 *.sqlite
-.env
-.env.local
+*.sqlite3
+*.log
+sxacc-qa-*
+qa-screenshots/
+p2p-profiles/
 
-# updater signing keys (NEVER commit the private key)
-.keys/
+# AI / agent tool metadata
+.freebuff/
+.cursor/
 
+# ---------------------------------------------------------------------------
 # editor / os noise
+# ---------------------------------------------------------------------------
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/*
 !.vscode/extensions.json
-*.log

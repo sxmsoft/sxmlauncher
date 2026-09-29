@@ -497,10 +497,14 @@ impl Library {
     }
 
     /// Native classifier key for this platform, e.g. `natives-windows`.
-    pub fn native_classifier(&self) -> Option<&str> {
+    ///
+    /// Through 1.12 Mojang wrote `natives-windows-${arch}`. The classifiers
+    /// map stores the expanded name (`natives-windows-64`), so the placeholder
+    /// has to be replaced before the lookup.
+    pub fn native_classifier(&self) -> Option<String> {
         let natives = self.natives.as_ref()?;
         let key = OsRule::current_os_name();
-        natives.get(key).map(String::as_str)
+        natives.get(key).map(|raw| expand_natives_arch(raw))
     }
 
     /// Native jar to download + extract for this platform.
@@ -509,11 +513,21 @@ impl Library {
         self.downloads
             .as_ref()
             .and_then(|d| d.classifiers.as_ref())
-            .and_then(|map| map.get(classifier))
+            .and_then(|map| map.get(&classifier))
     }
 
-    /// `true` when this library is needed on the client for the current OS.
+    /// `true` when this library is needed on the client for the current OS
+    /// and CPU architecture.
     pub fn is_applicable(&self, features: &FeatureSet) -> bool {
+        if let Some(classifier) = maven_classifier(&self.name) {
+            // 1.19+ ships one library per native variant and only an OS rule,
+            // so `natives-windows`, `natives-windows-arm64` and
+            // `natives-windows-x86` are all allowed on Windows. The official
+            // launcher keeps the jar for this CPU.
+            if classifier.contains("natives") && !classifier_matches_runtime_arch(&classifier) {
+                return false;
+            }
+        }
         match &self.rules {
             Some(rules) => rules_allow(rules, features),
             None => true,
@@ -531,6 +545,47 @@ impl Library {
             .map(|rules| rules.exclude.clone())
             .unwrap_or_default()
     }
+}
+
+/// Replace Mojang's `${arch}` natives placeholder (`32` or `64`).
+pub fn expand_natives_arch(classifier: &str) -> String {
+    if !classifier.contains("${arch}") {
+        return classifier.to_string();
+    }
+    let bits = if cfg!(target_pointer_width = "64") {
+        "64"
+    } else {
+        "32"
+    };
+    classifier.replace("${arch}", bits)
+}
+
+/// Classifier from `group:artifact:version:classifier`, when present.
+fn maven_classifier(name: &str) -> Option<String> {
+    MavenCoordinate::parse(name)
+        .ok()
+        .and_then(|coordinate| coordinate.classifier)
+}
+
+/// Keep the native jar that matches this CPU.
+///
+/// Unsuffixed classifiers (`natives-linux`, `natives-windows`) are the
+/// historical x64 jars and are kept. Explicit `-arm64` / `-x86` jars are
+/// kept only on that architecture.
+pub fn classifier_matches_runtime_arch(classifier: &str) -> bool {
+    classifier_matches_arch(classifier, OsRule::current_arch())
+}
+
+pub fn classifier_matches_arch(classifier: &str, arch: &str) -> bool {
+    let arm = matches!(arch, "arm64" | "aarch64");
+    let x86 = matches!(arch, "x86" | "x86_32" | "i386");
+    if classifier.contains("aarch64") || classifier.contains("arm64") {
+        return arm;
+    }
+    if classifier.contains("x86") && !classifier.contains("x86_64") {
+        return x86;
+    }
+    true
 }
 
 /// Version id whose `versions/<id>/<id>.jar` is the Mojang client.
@@ -808,5 +863,76 @@ mod tests {
         };
         assert!(library.artifact_url().is_none());
         assert!(library.artifact_path(&FeatureSet::default()).is_some());
+    }
+
+    fn empty_library(name: &str) -> Library {
+        Library {
+            name: name.into(),
+            downloads: None,
+            natives: None,
+            rules: None,
+            extract: None,
+            url: None,
+            sha1: None,
+            clientreq: None,
+        }
+    }
+
+    #[test]
+    fn natives_arch_placeholder_expands_to_the_pointer_width() {
+        assert_eq!(expand_natives_arch("natives-linux"), "natives-linux");
+        let expanded = expand_natives_arch("natives-windows-${arch}");
+        if cfg!(target_pointer_width = "64") {
+            assert_eq!(expanded, "natives-windows-64");
+        } else {
+            assert_eq!(expanded, "natives-windows-32");
+        }
+    }
+
+    #[test]
+    fn native_classifier_lookup_uses_the_expanded_name() {
+        let os = OsRule::current_os_name();
+        let expanded = expand_natives_arch("natives-${arch}");
+        let library = Library {
+            natives: Some(HashMap::from([(os.to_string(), "natives-${arch}".into())])),
+            downloads: Some(LibraryDownloads {
+                artifact: None,
+                classifiers: Some(HashMap::from([(
+                    expanded.clone(),
+                    DownloadArtifact {
+                        path: Some(format!("{expanded}.jar")),
+                        sha1: None,
+                        size: None,
+                        url: "https://example.invalid/natives.jar".into(),
+                    },
+                )])),
+            }),
+            ..empty_library("org.lwjgl.lwjgl:lwjgl-platform:2.9.4")
+        };
+        assert_eq!(
+            library.native_classifier().as_deref(),
+            Some(expanded.as_str())
+        );
+        assert!(library.native_artifact().is_some());
+    }
+
+    #[test]
+    fn wrong_architecture_native_jars_are_not_applicable() {
+        let features = FeatureSet::default();
+        // Unsuffixed `natives-linux` is the historical x64 jar and is kept.
+        assert!(empty_library("org.lwjgl:lwjgl:3.3.1:natives-linux").is_applicable(&features));
+        assert!(!classifier_matches_arch("natives-windows-arm64", "x86_64"));
+        assert!(classifier_matches_arch("natives-windows-arm64", "arm64"));
+        assert!(classifier_matches_arch("natives-windows", "x86_64"));
+        assert!(classifier_matches_arch("natives-windows-x86", "x86"));
+        assert!(!classifier_matches_arch("natives-windows-x86", "x86_64"));
+        // Netty's `linux-x86_64` classifier is not a LWJGL natives jar.
+        assert!(classifier_matches_arch("linux-x86_64", "x86_64"));
+        if !cfg!(target_arch = "aarch64") {
+            assert!(
+                !empty_library("org.lwjgl:lwjgl:3.3.1:natives-windows-arm64")
+                    .is_applicable(&features)
+            );
+        }
     }
 }

@@ -79,7 +79,8 @@ impl LaunchPlan {
     pub fn redacted_command_line(&self) -> String {
         let mut argv = self.command_line();
         for index in 0..argv.len() {
-            if argv[index] == "--accessToken" || argv[index] == "--clientId" {
+            // `--session` is the pre-1.6 spelling of the access token.
+            if matches!(argv[index].as_str(), "--accessToken" | "--session" | "--clientId") {
                 if index + 1 < argv.len() {
                     argv[index + 1] = "<redacted>".to_string();
                 }
@@ -126,6 +127,11 @@ impl LaunchPlanner {
             .as_deref()
             .unwrap_or(version.id.as_str());
         let natives = self.paths.natives().join(natives_id);
+        // LWJGL refuses to extract into a missing directory, and pre-1.19
+        // versions load `.dll`/`.so` files from here. 1.19+ never extracts
+        // during install (natives are jars on the classpath), so create it
+        // at launch or the process exits immediately.
+        std::fs::create_dir_all(&natives)?;
         let classpath = self.build_classpath(version, &root)?;
 
         if classpath.is_empty() {
@@ -217,10 +223,15 @@ impl LaunchPlanner {
                 .into_iter()
                 .map(|token| substitute(token, &substitutions))
                 .collect(),
+            // 1.12.2 and older (and Forge profiles that inherit them) have no
+            // `arguments` object — only `minecraftArguments`. The placeholders
+            // still have to be filled in. Leaving them literal starts a JVM
+            // whose classpath is the string `${classpath}`, which prints
+            // "Could not find or load main class" and exits 1.
             None => vec![
-                "-Djava.library.path=${natives_directory}".to_string(),
+                substitute("-Djava.library.path=${natives_directory}", &substitutions),
                 "-cp".to_string(),
-                "${classpath}".to_string(),
+                substitute("${classpath}", &substitutions),
             ],
         };
 
@@ -498,6 +509,22 @@ pub async fn spawn(
     if let Some(parent) = plan.log_file.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
+    // The command is the only way to tell a bad classpath from a mod crash
+    // after the process has already exited 1.
+    {
+        use tokio::io::AsyncWriteExt;
+        let header = format!(
+            "\n---- launch {} ----\n{}\n",
+            chrono::Utc::now().to_rfc3339(),
+            plan.redacted_command_line()
+        );
+        let mut file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&plan.log_file)
+            .await?;
+        file.write_all(header.as_bytes()).await?;
+    }
 
     // Required order: java [jvm args] MainClass [game args].
     let mut command = crate::process::command(&plan.java);
@@ -738,6 +765,123 @@ mod tests {
         assert!(
             ignore.contains("neoforge-21.1.251.jar"),
             "profile id stays on the ignore list, got {ignore}"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Forge 1.12.2 (and vanilla 1.7–1.12) publish `minecraftArguments` and no
+    /// `arguments` object. The JVM still needs a real `-cp` and natives path.
+    #[test]
+    fn legacy_profiles_substitute_classpath_and_natives() {
+        let root = std::env::temp_dir().join(format!(
+            "sxm-legacy-launch-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let paths = AppPaths::from_root(&root);
+        paths.ensure().expect("layout");
+        let client = paths.version_dir("1.12.2").join("1.12.2.jar");
+        std::fs::create_dir_all(client.parent().unwrap()).unwrap();
+        std::fs::write(&client, b"jar").unwrap();
+
+        let now = chrono::Utc::now();
+        let id = uuid::Uuid::new_v4();
+        let mut java = crate::models::instance::JavaSettings::default();
+        java.override_path = Some(PathBuf::from("/usr/bin/java"));
+        let instance = crate::models::instance::Instance {
+            config: crate::models::instance::InstanceConfig {
+                id,
+                name: "RLCraft".into(),
+                description: String::new(),
+                icon: None,
+                game_version: "1.12.2".into(),
+                loader: crate::models::instance::ModLoader::new(
+                    crate::models::instance::LoaderKind::Forge,
+                    "14.23.5.2860",
+                ),
+                java,
+                memory: crate::models::instance::MemorySettings::default(),
+                resolution: crate::models::instance::ResolutionSettings::default(),
+                game_args: Vec::new(),
+                source_pack: None,
+                created_at: now,
+                updated_at: now,
+            },
+            status: crate::models::instance::InstanceStatus::Ready,
+            mod_count: 0,
+            last_played_at: None,
+            total_playtime_secs: 0,
+            launch_count: 0,
+            size_bytes: 0,
+            required_java_major: 8,
+        };
+        // Shape of `version.json` inside the Forge 1.12.2 installer.
+        let version = VersionJson {
+            id: "1.12.2-forge-14.23.5.2860".into(),
+            inherits_from: Some("1.12.2".into()),
+            main_class: Some("net.minecraft.launchwrapper.Launch".into()),
+            assets: Some("1.12".into()),
+            asset_index: None,
+            libraries: Vec::new(),
+            arguments: None,
+            minecraft_arguments: Some(
+                "--username ${auth_player_name} --version ${version_name} \
+                 --gameDir ${game_directory} --assetsDir ${assets_root} \
+                 --assetIndex ${assets_index_name} --tweakClass net.minecraftforge.fml.common.launcher.FMLTweaker"
+                    .into(),
+            ),
+            downloads: None,
+            java_version: None,
+            release_time: None,
+            release_type: Some("release".into()),
+        };
+
+        let plan = LaunchPlanner::new(paths, Vec::new())
+            .build(
+                &instance,
+                &version,
+                &LaunchIdentity::offline("Steve", uuid::Uuid::nil()),
+                &LaunchExtras::default(),
+            )
+            .expect("plan");
+
+        let cp_at = plan
+            .jvm_args
+            .iter()
+            .position(|arg| arg == "-cp")
+            .expect("-cp");
+        let classpath = plan.jvm_args.get(cp_at + 1).expect("classpath argument");
+        assert!(
+            !classpath.contains("${classpath}"),
+            "legacy launch passed the placeholder classpath: {classpath}"
+        );
+        assert!(
+            classpath.contains("1.12.2.jar"),
+            "classpath must include the inherited client jar, got {classpath}"
+        );
+        let library_path = plan
+            .jvm_args
+            .iter()
+            .find(|arg| arg.starts_with("-Djava.library.path="))
+            .expect("natives path");
+        assert!(
+            !library_path.contains("${natives_directory}"),
+            "natives path was left as a placeholder: {library_path}"
+        );
+        assert!(
+            library_path.contains("1.12.2"),
+            "natives path should follow the vanilla parent, got {library_path}"
+        );
+        assert!(
+            plan.game_args
+                .windows(2)
+                .any(|pair| { pair[0] == "--username" && pair[1] == "Steve" }),
+            "legacy minecraftArguments were not substituted: {:?}",
+            plan.game_args
+        );
+        assert_eq!(plan.main_class, "net.minecraft.launchwrapper.Launch");
+        assert!(
+            !plan.redacted_command_line().contains("${classpath}"),
+            "command line still contains an unsubstituted classpath"
         );
         let _ = std::fs::remove_dir_all(root);
     }
