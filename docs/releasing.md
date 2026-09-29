@@ -1,9 +1,14 @@
 # Releasing SXMLauncher
 
-The release pipeline is fully automated: pushing a tag builds the signed
-Windows installers, generates the updater feed and publishes everything to a
-GitHub release. Installed launchers then find the new version through the
-updater endpoint baked into the app.
+> **Current state:** `.github/workflows/release.yml` runs only on manual
+> `workflow_dispatch` (existing tag + typing `LINUX-QA-PASSED`); the tag-push
+> trigger is disabled. After pushing the tag, start the workflow from the
+> Actions tab. Everything below still applies once the tag trigger is
+> re-enabled.
+
+The release pipeline builds the signed Windows installers, generates the
+updater feed and publishes everything to a GitHub release. Installed launchers
+then find the new version through the updater endpoint baked into the app.
 
 ## One-time repository setup
 
