@@ -7,7 +7,7 @@ in with Microsoft, Ely.by, sx.acc or offline accounts, and hosts / joins
 worlds peer-to-peer with a short share code.
 
 > Handing the project over? Read [HANDOVER.md](HANDOVER.md) for open issues
-> and the list of in-flight branches.
+> and security follow-ups.
 
 ---
 
@@ -138,8 +138,8 @@ commit the resulting `tauri.conf.json` change).
 
 ## CI builds
 
-* **`.github/workflows/build.yml`** — on pull requests, pushes to `main` /
-  `handover/**`, or manual dispatch.
+* **`.github/workflows/build.yml`** — on pull requests, pushes to `main`, or
+  manual dispatch.
   * `build-linux` (ubuntu-22.04): typecheck, vitest, `cargo test --lib`, then an
     unsigned `.deb` + `.AppImage` uploaded as the `SXMLAUNCHER-linux` artifact.
   * `build-windows`: unsigned NSIS + MSI + portable exe uploaded as

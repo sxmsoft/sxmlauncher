@@ -5,30 +5,18 @@ Status snapshot for the incoming developer. Read together with
 
 ## Where the code is
 
-* The PR branches form a **stack**; the latest complete code is
-  `cursor/fix-modpack-launch-exit-8ca3` (PR #10). `handover/cleanup` is cut
-  from it and only adds docs, config hygiene and log redaction.
-* `main` still contains only the pre-rewrite reset commit. Nothing of the
-  Tauri 2 rewrite is merged yet.
-* Suggested merge order: #2 → #3 → #4 → #5 → #6 → (`cursor/misty-fixes-windows-build`)
-  → #8 → #9 → #10 → handover PR, then rebase #7 and the two unmerged #9 commits
-  (see below) on top.
-
-## In-flight PRs / branches
-
-| PR | Branch | Base | One-line summary |
-|---|---|---|---|
-| #2 | `cursor/sxmlauncher-rewrite-a8a2` | `main` | Tauri 2 + React launcher rewrite (vertical slice). |
-| #3 | `cursor/nebula-vault-ui-3cab` | #2 | "Nebula Vault" UI. Tip commit 05a6886 (Activity progress only while work runs) was **not** carried into the stack. |
-| #4 | `cursor/fix-oauth-providers-9aa8` | #3 | Fix Ely.by and Microsoft browser sign-in. |
-| #5 | `cursor/misty-visual-redesign-f4d5` | #4 | Charcoal play board redesign. |
-| #6 | `cursor/fix-production-bugs-630f` | #5 | Activity, wallpaper, Ely.by skin, Xbox login, modpack install fixes. |
-| — | `cursor/misty-fixes-windows-build` | (#6) | No PR; Windows-build fixes that #7 and #8 are based on. |
-| #7 | `cursor/p2p-host-join-1794` | misty-fixes | Harden P2P host/share code/join, Quick Play joins, relay fallback on strict NAT, Redis URL redaction. **5 commits not in the #10 stack** — needs a rebase. |
-| #8 | `cursor/loader-icons-discord-presence-7b8b` | misty-fixes | New loader icons + Discord Rich Presence. |
-| #9 | `cursor/sxacc-account-b685` | #8 | sx.acc login/registration + authlib launch. Its **last 2 commits (278b020, c81e0d9: sx.acc refresh/OS trust store, SPA consent page, scrollable login dialog, app-owned context menu) are not in #10** — unreviewed partial fixes for the open issues below. |
-| #10 | `cursor/fix-modpack-launch-exit-8ca3` | #9 | Fix modpacks exiting with code 1 on legacy `${classpath}` placeholders; sx.acc v2 routes; SXMWARE credits. |
-| #1 (closed) | `cursor/fix-critical-launcher-bugs-4a9e` | `main` | Pre-rewrite launcher fixes. Obsolete. **Contains a leaked secret in history — see "Security follow-ups".** Delete after the history scrub. |
+* `main` is the only branch. It holds the full Tauri 2 rewrite: the old PR
+  stack (#2 → #10) plus the handover cleanup (#11). All of those PRs were closed
+  as "consolidated into main" and their branches were deleted from GitHub.
+* A few commits that were **not** in the stack are archived in the owner's
+  offline backup bundle (ask the owner if you need them; they are not on GitHub):
+  * P2P hardening, 5 commits (old PR #7, tip `cf89fca`): stricter share-code
+    validation, Quick Play joins on modern clients, relay fallback when a
+    strict-NAT direct tunnel stalls, Redis URL redaction.
+  * sx.acc / UI fixes, 2 commits (old PR #9 tip `acb2188`, `fcaeb16`): OS trust
+    store + system proxy for sx.acc refresh, SPA consent page, scrollable login
+    dialog, app-owned context menu. These are partial attempts at issues 1–3 below.
+  * Activity progress tweak, 1 commit (old PR #3 tip `4e5ecfb`).
 
 ## Known open issues
 
@@ -37,12 +25,12 @@ Status snapshot for the incoming developer. Read together with
    button can't be reached. Fix in `src/components/account/login-dialog.tsx`
    (make the dialog body `overflow-y-auto` with a `max-h` tied to the viewport,
    or use `components/ui/scroll-area.tsx`, which is currently unused).
-   Commit 278b020 on #9 has an attempt.
+   An archived commit (`acb2188`, see above) has an attempt.
 2. **Disable the Tauri WebView default right-click menu** and replace it with
    app-owned menus (instance card, library, text inputs keep copy/paste).
    Needs a global `contextmenu` handler in the frontend plus, on Windows,
    WebView2's `AreDefaultContextMenusEnabled = false`
-   (`src-tauri/src/lib.rs`). Commits 278b020 / c81e0d9 on #9 have an attempt
+   (`src-tauri/src/lib.rs`). Archived commits `acb2188` / `fcaeb16` have an attempt
    (`src/components/ui/app-context-menu.tsx`).
 3. **Auth refresh hardening** (`src-tauri/src/auth/mod.rs`, `auth/sxacc.rs`, `auth/msa.rs`):
    * Don't force a refresh when the access token is still valid —
@@ -79,16 +67,14 @@ Status snapshot for the incoming developer. Read together with
 
 ## Security follow-ups (owner action)
 
-* The working tree of `handover/cleanup` contains **no secrets** (gitleaks +
-  trufflehog + manual review). All secrets are read from env/Settings.
-* History still contains an **Ely.by OAuth client secret** (branch
-  `cursor/fix-critical-launcher-bugs-4a9e`, commit `e1f2ec0`,
-  `src-tauri/src/config.rs`). Rotate it at
-  <https://account.ely.by/dev/applications> and then scrub history (plan in
-  the handover PR description). The current code does not use a secret with
+* The working tree contains **no secrets** (gitleaks + trufflehog + manual
+  review). All secrets are read from env/Settings.
+* An Ely.by OAuth client secret that once sat in an obsolete pre-rewrite
+  branch was scrubbed from history (`***REMOVED***`), and author e-mails were
+  normalised to the GitHub noreply address. The owner must still **rotate** that
+  secret at <https://account.ely.by/dev/applications> and ask GitHub Support to
+  purge cached `refs/pull/*` views. The current code does not use a secret with
   the default public client `sxmlauncher3`.
-* Four early commits carry the owner's personal e-mail as author metadata;
-  fix with a `.mailmap` + filter-repo during the same scrub if desired.
 * GitHub Actions only use `secrets.TAURI_SIGNING_PRIVATE_KEY` and
   `secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Keep the private key in the
   gitignored `.keys/` folder and in the repository secrets only.
